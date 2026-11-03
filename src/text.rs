@@ -264,7 +264,16 @@ pub fn sentences(text: &str, max_len: usize) -> Vec<String> {
     for line in text.lines() {
         split_line(line.trim(), max_len, &mut out);
     }
+    // A fragment of pure punctuation — a bullet, an em dash, a row of dots from a
+    // table of contents — has nothing to say. Left in, it becomes a request the engine
+    // answers with an empty body, which used to stop a book mid-chapter.
+    out.retain(|sentence| speakable(sentence));
     out
+}
+
+/// Is there anything here a voice could pronounce?
+pub fn speakable(text: &str) -> bool {
+    text.chars().any(|character| character.is_alphanumeric())
 }
 
 fn split_line(line: &str, max_len: usize, out: &mut Vec<String>) {

@@ -97,3 +97,11 @@ fn sentences_of_empty_text_are_empty() {
     assert!(sentences("   \n\n  ", MAX).is_empty());
     assert_eq!(strip_html(""), "");
 }
+
+#[test]
+fn fragments_with_nothing_to_pronounce_are_not_sentences() {
+    // A bullet, an em dash, a row of dots: the engine answers these with an empty
+    // body, which used to stop a book mid-chapter. They should never get that far.
+    let text = "\u{2022}\n\u{2014}\u{2014}\n\u{2026}\n...\n\nReal prose here.\n1.2\n";
+    assert_eq!(sentences(text, MAX), vec!["Real prose here.", "1.2"]);
+}
