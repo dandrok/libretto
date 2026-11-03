@@ -1,0 +1,51 @@
+name: release
+
+# Two jobs, both on push to main:
+#   release  — if Cargo.toml's version has no tag yet, create the tag and the GitHub
+#              release from the CHANGELOG entry.
+#   release-pr — otherwise open a PR that bumps the version and writes the next
+#              CHANGELOG section from the conventional commits since the last tag.
+#
+# The binary is not published to crates.io (publish = false), so there is no registry
+# step here by design.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: tag and release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-pr:
+    name: open the next version PR
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release-pr
+        env:
+          # Note: a PR opened with GITHUB_TOKEN does not trigger further workflows,
+          # so the version PR shows no CI. Add a fine-grained PAT as RELEASE_PLZ_TOKEN
+          # and use `secrets.RELEASE_PLZ_TOKEN` here if you want checks on it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
