@@ -73,7 +73,9 @@ cli.rs  ->  commands/  ->  store.rs | epub.rs | play.rs
 - `add` canonicalises and opens the EPUB read-only; nothing is copied, nothing is rewritten
 - Writes only under `~/.local/share/libretto`, `~/.cache/libretto`, `~/.config/libretto`
 - Atomic writes (temp + rename) for `library.json`; a lock file for concurrent readers
-- `cargo-audit` + `cargo-deny` in CI on every PR and weekly on a schedule
+- `cargo-audit` + `cargo-deny` on every PR, on `main`, and weekly; the same checks run
+  in `.githooks/pre-push` so a red pipeline is caught before the push
+- Both scanners skip with a printed note when not installed locally; CI never skips
 - Dependency rule: no crate that is yanked, unmaintained, or untouched for 12 months
 - Tests never touch the network: a fake TTS server on a local port counts requests
 - The `security-review` skill runs on every PR before merge, not only when we suspect something

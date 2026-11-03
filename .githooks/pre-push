@@ -1,4 +1,19 @@
 #!/bin/sh
-# pre-push: the suite must be green before it leaves this machine
+# pre-push: everything CI will check, so a red pipeline is a local failure.
 set -e
-cargo test --all-features
+
+cargo test --all-features --quiet
+
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check
+else
+  echo "pre-push: cargo-deny not installed - skipping (CI still enforces it)"
+  echo "pre-push: install with: cargo install cargo-deny --locked"
+fi
+
+if command -v cargo-audit >/dev/null 2>&1; then
+  cargo audit
+else
+  echo "pre-push: cargo-audit not installed - skipping (CI still enforces it)"
+  echo "pre-push: install with: cargo install cargo-audit --locked"
+fi

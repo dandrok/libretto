@@ -1,5 +1,6 @@
 #!/bin/sh
-# pre-commit: formatting and lints are not negotiable
+# pre-commit: formatting and lints are not negotiable, and they are cheap.
 set -e
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features --quiet
