@@ -17,6 +17,9 @@ use crate::paths;
 pub const LIBRARY_FILE: &str = "library.json";
 const LOCK_FILE: &str = "library.lock";
 const VERSION: u32 = 1;
+/// A library this large is not a library. Parsing it would be an allocation an
+/// unreadable file chose for us.
+const MAX_LIBRARY_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -180,14 +183,24 @@ impl Store {
 
     pub fn load(&self) -> Result<Library, StoreError> {
         let path = self.library_path();
-        match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|error| StoreError::Corrupt {
-                path: path.display().to_string(),
-                reason: error.to_string(),
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Library::default()),
-            Err(source) => Err(StoreError::Io { source }),
+        match fs::metadata(&path) {
+            Ok(meta) if meta.len() > MAX_LIBRARY_BYTES => {
+                return Err(StoreError::Corrupt {
+                    path: path.display().to_string(),
+                    reason: format!("{} bytes is larger than any real library", meta.len()),
+                });
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Library::default());
+            }
+            Err(source) => return Err(StoreError::Io { source }),
         }
+        let text = fs::read_to_string(&path).map_err(|source| StoreError::Io { source })?;
+        serde_json::from_str(&text).map_err(|error| StoreError::Corrupt {
+            path: path.display().to_string(),
+            reason: error.to_string(),
+        })
     }
 
     /// Write to a sibling temp file, then rename: a crash mid-write leaves the
@@ -460,6 +473,41 @@ mod tests {
                 "the directory name alone leaks reading habits"
             );
         }
+    }
+
+    #[test]
+    fn a_symlink_planted_at_the_temp_path_is_not_followed() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let store = Store::at(dir.path());
+            let victim = dir.path().join("victim.txt");
+            fs::write(&victim, b"do not touch").expect("victim");
+            symlink(&victim, dir.path().join("library.json.tmp")).expect("plant link");
+
+            store
+                .save(&Library::default())
+                .expect("save replaces the link");
+
+            assert_eq!(
+                fs::read_to_string(&victim).expect("victim readable"),
+                "do not touch",
+                "a pre-planted symlink must not redirect the write"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absurdly_large_library_is_refused_before_parsing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::at(dir.path());
+        fs::create_dir_all(dir.path()).expect("dir");
+        let body = "x".repeat((MAX_LIBRARY_BYTES + 1) as usize);
+        fs::write(store.library_path(), body).expect("write");
+
+        assert!(matches!(store.load(), Err(StoreError::Corrupt { .. })));
     }
 
     #[test]
