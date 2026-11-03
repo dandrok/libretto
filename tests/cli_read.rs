@@ -1,6 +1,7 @@
 //! AC-4, AC-6, AC-7, AC-8: the `read` command's contract.
 //!
-//! Playback runs with `--player /bin/true`, so a "player" is a process that exits
+//! Playback runs with `--player true` — resolved from PATH, never an absolute
+//! path, because macOS keeps it in /usr/bin while Linux has it in /bin.
 //! immediately: the loop and the position bookkeeping are exercised, no audio
 //! device is needed, and no test depends on how fast mpv starts.
 
@@ -47,7 +48,7 @@ fn position(sandbox: &Sandbox, id_fragment: &str) -> (usize, usize) {
 }
 
 fn read_args<'a>(book: &'a str, fake: &'a FakeTts, extra: &[&'a str]) -> Vec<&'a str> {
-    let mut args = vec!["read", book, "--player", "/bin/true"];
+    let mut args = vec!["read", book, "--player", "true"];
     args.extend_from_slice(extra);
     let _ = fake;
     args
@@ -163,14 +164,7 @@ fn an_ambiguous_prefix_lists_the_candidates_and_exits_2() {
     sandbox.stdout_of(&["add", second.to_str().expect("path")]);
 
     let endpoint = fake.endpoint();
-    let output = sandbox.run(&[
-        "read",
-        "gro",
-        "--player",
-        "/bin/true",
-        "--endpoint",
-        &endpoint,
-    ]);
+    let output = sandbox.run(&["read", "gro", "--player", "true", "--endpoint", &endpoint]);
 
     assert_eq!(output.status.code(), Some(2), "ambiguous is its own code");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -191,7 +185,7 @@ fn an_unknown_book_exits_1() {
         "read",
         "nothing-here",
         "--player",
-        "/bin/true",
+        "true",
         "--endpoint",
         &endpoint,
     ]);
@@ -214,7 +208,7 @@ fn a_dead_tts_endpoint_exits_3_and_leaves_the_position_alone() {
         "read",
         "unreachable",
         "--player",
-        "/bin/true",
+        "true",
         "--endpoint",
         "http://127.0.0.1:9/v1",
     ]);
@@ -287,7 +281,7 @@ fn a_changed_book_file_is_refused_instead_of_read() {
         "read",
         "original",
         "--player",
-        "/bin/true",
+        "true",
         "--endpoint",
         &endpoint,
     ]);
