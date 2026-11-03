@@ -31,6 +31,15 @@ pub enum Command {
         /// Full id or any unique prefix
         id: String,
     },
+    /// Check that the library, config, player, TTS endpoint and cache are healthy
+    Doctor {
+        /// TTS base URL to probe, e.g. http://127.0.0.1:8880/v1
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Player program to look for (default mpv)
+        #[arg(long)]
+        player: Option<String>,
+    },
     /// Read a book aloud from where you stopped (default: the last book)
     Read {
         /// Full id or any unique prefix

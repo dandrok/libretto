@@ -100,16 +100,35 @@
     },
     {
       "id": "T6",
-      "title": "Performance harness for ls at 50 books",
+      "title": "ls performance budget at 50 books",
       "files_in_scope": [
-        "tests/perf.rs"
+        "tests/perf.rs",
+        "tests/common/mod.rs"
       ],
       "done_criteria": [
         "AC-10"
       ],
       "depends_on": [
         "T2"
-      ]
+      ],
+      "status": "done"
+    },
+    {
+      "id": "T7",
+      "title": "doctor command: library, config, player, endpoint, cache",
+      "files_in_scope": [
+        "src/doctor.rs",
+        "src/cli.rs",
+        "src/main.rs",
+        "src/lib.rs",
+        "tests/doctor.rs"
+      ],
+      "done_criteria": [],
+      "depends_on": [
+        "T2",
+        "T4"
+      ],
+      "status": "done"
     }
   ]
 }

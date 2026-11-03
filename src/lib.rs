@@ -7,6 +7,7 @@
 
 pub mod cache;
 pub mod config;
+pub mod doctor;
 pub mod epub;
 pub mod paths;
 pub mod play;
