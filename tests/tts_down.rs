@@ -56,16 +56,30 @@ fn an_error_status_is_reported_with_the_code() {
 
 #[test]
 fn an_oversized_reply_is_refused_instead_of_allocated() {
-    // 33 MiB for one sentence is not audio, it is an endpoint deciding how much
-    // memory this process gets to use.
-    let huge = vec![b'x'; 33 * 1024 * 1024];
-    let fake = FakeTts::start(Reply::Audio(huge));
-    let engine = Kokoro::new(fake.endpoint()).expect("engine");
+    // The ceiling is injected: 2 KiB against 1 KiB. Asserting the *limit* with a
+    // 33 MiB body made this test depend on socket timing — on CI the client hit
+    // its limit, closed, and the error surfaced as "Peer disconnected" instead
+    // of BodyExceedsLimit. The property under test is "a reply past the limit is
+    // refused", and a small limit tests it deterministically.
+    let fake = FakeTts::start(Reply::Audio(vec![b'x'; 2048]));
+    let engine = Kokoro::with_max_audio_bytes(fake.endpoint(), 1024).expect("engine");
     let error = engine
         .synthesize(&SpeechRequest::new("Hello."))
         .expect_err("must fail");
 
     assert!(matches!(error, TtsError::TooLarge { .. }), "got {error}");
+}
+
+#[test]
+fn a_reply_under_the_ceiling_is_accepted() {
+    // Positive control for the limit above: without this, a test asserting
+    // "oversized is refused" also passes when *everything* is refused.
+    let fake = FakeTts::start(Reply::Audio(vec![b'a'; 1000]));
+    let engine = Kokoro::with_max_audio_bytes(fake.endpoint(), 1024).expect("engine");
+    let audio = engine
+        .synthesize(&SpeechRequest::new("Hello."))
+        .expect("1000 bytes is not oversized");
+    assert_eq!(audio.len(), 1000);
 }
 
 #[test]

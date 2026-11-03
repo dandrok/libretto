@@ -73,12 +73,23 @@ pub trait TtsEngine {
 pub struct Kokoro {
     endpoint: String,
     agent: ureq::Agent,
+    max_audio_bytes: u64,
 }
 
 impl Kokoro {
     /// The endpoint is validated here, not at request time: a config typo should
     /// fail once, with the value, rather than per sentence.
     pub fn new(endpoint: impl Into<String>) -> Result<Self, TtsError> {
+        Self::with_max_audio_bytes(endpoint, MAX_AUDIO_BYTES)
+    }
+
+    /// The ceiling is injectable so a test can exercise the limit with a 2 KiB
+    /// body instead of allocating 33 MiB and racing the socket: the property is
+    /// "a reply past the limit is refused", not "a big write survives a reset".
+    pub fn with_max_audio_bytes(
+        endpoint: impl Into<String>,
+        max_audio_bytes: u64,
+    ) -> Result<Self, TtsError> {
         let endpoint = endpoint.into().trim_end_matches('/').to_string();
         if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
             return Err(TtsError::BadEndpoint { endpoint });
@@ -87,7 +98,11 @@ impl Kokoro {
             .timeout_global(Some(Duration::from_secs(120)))
             .build()
             .new_agent();
-        Ok(Self { endpoint, agent })
+        Ok(Self {
+            endpoint,
+            agent,
+            max_audio_bytes,
+        })
     }
 
     pub fn endpoint(&self) -> &str {
@@ -125,7 +140,7 @@ impl TtsEngine for Kokoro {
         let bytes = response
             .body_mut()
             .with_config()
-            .limit(MAX_AUDIO_BYTES)
+            .limit(self.max_audio_bytes)
             .read_to_vec()
             .map_err(|error| match error {
                 // ureq reports the ceiling it enforced rather than truncating.
@@ -139,10 +154,10 @@ impl TtsEngine for Kokoro {
                 },
             })?;
 
-        if bytes.len() as u64 > MAX_AUDIO_BYTES {
+        if bytes.len() as u64 > self.max_audio_bytes {
             return Err(TtsError::TooLarge {
                 endpoint: self.endpoint.clone(),
-                limit_bytes: MAX_AUDIO_BYTES,
+                limit_bytes: self.max_audio_bytes,
             });
         }
         if bytes.is_empty() {

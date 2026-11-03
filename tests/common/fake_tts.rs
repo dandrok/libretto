@@ -145,13 +145,14 @@ fn serve(
                 "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 bytes.len()
             );
-            stream.write_all(head.as_bytes())?;
-            stream.write_all(bytes)?;
+            write_response(&mut stream, head.as_bytes(), bytes);
         }
         Reply::Empty => {
-            stream.write_all(
+            write_response(
+                &mut stream,
                 b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            )?;
+                b"",
+            );
         }
         Reply::Status(code) => {
             let body = b"nope";
@@ -159,11 +160,25 @@ fn serve(
                 "HTTP/1.1 {code} Nope\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
-            stream.write_all(head.as_bytes())?;
-            stream.write_all(body)?;
+            write_response(&mut stream, head.as_bytes(), body);
         }
     }
-    stream.flush()
+    Ok(())
+}
+
+/// A client that hits its own read limit closes the socket mid-body, so a write
+/// error here is the expected outcome and must not fail the fake: the test is
+/// about the client's ceiling, not about how the server dies.
+fn write_response(stream: &mut TcpStream, head: &[u8], body: &[u8]) {
+    if stream.write_all(head).is_err() {
+        return;
+    }
+    for chunk in body.chunks(64 * 1024) {
+        if stream.write_all(chunk).is_err() {
+            return;
+        }
+    }
+    let _ = stream.flush();
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
