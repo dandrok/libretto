@@ -2,17 +2,32 @@
 # pre-push: everything CI will check, so a red pipeline is a local failure.
 set -e
 
+# `cargo install` puts binaries in $CARGO_HOME/bin, which is not on PATH in every
+# shell — CI images, sandboxes, minimal dotfiles. Looking there too is the difference
+# between running the audit and printing "skipping" while calling it a gate.
+tool() {
+  command -v "$1" 2>/dev/null || {
+    for candidate in "${CARGO_HOME:-$HOME/.cargo}/bin/$1" "$HOME/.cargo/bin/$1"; do
+      if [ -x "$candidate" ]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+    return 1
+  }
+}
+
 cargo test --all-features --quiet
 
-if command -v cargo-deny >/dev/null 2>&1; then
-  cargo deny check
+if deny=$(tool cargo-deny); then
+  "$deny" check
 else
   echo "pre-push: cargo-deny not installed - skipping (CI still enforces it)"
   echo "pre-push: install with: cargo install cargo-deny --locked"
 fi
 
-if command -v cargo-audit >/dev/null 2>&1; then
-  cargo audit
+if audit=$(tool cargo-audit); then
+  "$audit" audit
 else
   echo "pre-push: cargo-audit not installed - skipping (CI still enforces it)"
   echo "pre-push: install with: cargo install cargo-audit --locked"
