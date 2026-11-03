@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-03
+
 ### Added
 
 - PDF import: `libretto add book.pdf` reads PDFs that have a text layer, with chapters
