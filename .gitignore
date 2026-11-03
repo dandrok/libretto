@@ -7,3 +7,5 @@
 *.epub
 !tests/fixtures/*.epub
 .DS_Store
+# scanner output stays local
+.security-review/
