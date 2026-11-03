@@ -5,7 +5,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cache;
 pub mod epub;
 pub mod paths;
 pub mod store;
 pub mod text;
+pub mod tts;

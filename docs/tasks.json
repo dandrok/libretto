@@ -61,12 +61,17 @@
     },
     {
       "id": "T4",
-      "title": "TTS client and content-addressed audio cache",
+      "title": "TTS client, content-addressed audio cache, fake endpoint for tests",
       "files_in_scope": [
         "src/tts.rs",
         "src/cache.rs",
+        "src/lib.rs",
+        "Cargo.toml",
+        "examples/speak.rs",
         "tests/cache.rs",
-        "tests/tts_down.rs"
+        "tests/tts_down.rs",
+        "tests/common/mod.rs",
+        "tests/common/fake_tts.rs"
       ],
       "done_criteria": [
         "AC-5",
