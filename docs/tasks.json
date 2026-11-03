@@ -45,10 +45,11 @@
     },
     {
       "id": "T3",
-      "title": "read command: prefix resolution and argument surface",
+      "title": "read command: prefix resolution, flags and config",
       "files_in_scope": [
         "src/cli.rs",
         "src/main.rs",
+        "src/config.rs",
         "tests/cli_read.rs"
       ],
       "done_criteria": [
@@ -57,7 +58,8 @@
       ],
       "depends_on": [
         "T2"
-      ]
+      ],
+      "status": "done"
     },
     {
       "id": "T4",
@@ -84,8 +86,7 @@
       "title": "Playback loop, resume and skip",
       "files_in_scope": [
         "src/play.rs",
-        "tests/resume.rs",
-        "tests/skip.rs"
+        "tests/cli_read.rs"
       ],
       "done_criteria": [
         "AC-6",
@@ -94,7 +95,8 @@
       "depends_on": [
         "T3",
         "T4"
-      ]
+      ],
+      "status": "done"
     },
     {
       "id": "T6",
