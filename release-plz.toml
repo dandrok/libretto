@@ -1,0 +1,12 @@
+[workspace]
+# Release automation. The binary is not published to crates.io (`publish = false`
+# in Cargo.toml), so a release is: a CHANGELOG entry, an annotated git tag, and a
+# GitHub release whose notes come from that entry.
+changelog_update = true
+git_release_enable = true
+git_tag_enable = true
+git_release_name = "v{{version}}"
+
+[[package]]
+name = "libretto"
+publish = false
