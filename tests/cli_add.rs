@@ -144,6 +144,32 @@ fn add_reports_a_missing_file_without_creating_a_library() {
     let sandbox = Sandbox::new();
     let missing = sandbox.root().join("nope.epub");
     let output = sandbox.run(&["add", missing.to_str().expect("path")]);
-    assert_eq!(output.status.code(), Some(6));
+
+    // A path that does not resolve is bad input, not a broken library: the old
+    // message ("cannot reach the library") sent a user hunting the wrong thing.
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot read"), "{stderr}");
+    assert!(stderr.contains("nope.epub"), "names the file: {stderr}");
+    assert!(
+        !stderr.contains("library"),
+        "not a library problem: {stderr}"
+    );
     assert!(!Path::new(&sandbox.library_path()).exists());
+}
+
+#[test]
+fn a_relative_path_that_does_not_resolve_says_where_it_looked() {
+    // `~/git/libretto` is a symlink into a sandbox, so `../../Downloads/x.pdf` can
+    // resolve somewhere the prompt never suggests. The error must show the resolution.
+    let sandbox = Sandbox::new();
+    let output = sandbox.run(&["add", "../../nope/x.pdf"]);
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("resolved to"),
+        "shows the real path: {stderr}"
+    );
+    assert!(stderr.contains("x.pdf"), "{stderr}");
 }

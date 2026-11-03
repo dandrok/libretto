@@ -433,6 +433,8 @@ impl AppError {
                 StoreError::UnknownBook => EXIT_UNKNOWN_BOOK,
                 StoreError::Ambiguous { .. } => EXIT_AMBIGUOUS,
                 StoreError::AlreadyLocked => EXIT_ALREADY_READING,
+                // A path that was never resolved is bad input, not a broken state.
+                StoreError::Unreadable { .. } => EXIT_BAD_BOOK,
                 StoreError::Corrupt { .. }
                 | StoreError::Encode(_)
                 | StoreError::Io { .. }
