@@ -321,12 +321,17 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
     store.save(&library)?;
 
     println!(
-        "stopped at chapter {}, sentence {}/{} ({} played, {} from cache)",
+        "stopped at chapter {}, sentence {}/{} ({} played, {} from cache{})",
         chapter_index + 1,
         played.next,
         sentences.len(),
         played.count,
-        played.cache_hits
+        played.cache_hits,
+        if played.skipped > 0 {
+            format!(", {} skipped", played.skipped)
+        } else {
+            String::new()
+        }
     );
     if played.next >= sentences.len() && chapter_index + 1 < book.chapters.len() {
         println!(
@@ -433,6 +438,8 @@ impl AppError {
                 StoreError::UnknownBook => EXIT_UNKNOWN_BOOK,
                 StoreError::Ambiguous { .. } => EXIT_AMBIGUOUS,
                 StoreError::AlreadyLocked => EXIT_ALREADY_READING,
+                // A path that was never resolved is bad input, not a broken state.
+                StoreError::Unreadable { .. } => EXIT_BAD_BOOK,
                 StoreError::Corrupt { .. }
                 | StoreError::Encode(_)
                 | StoreError::Io { .. }

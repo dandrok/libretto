@@ -28,6 +28,14 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
+    /// The book file itself could not be read. Separate from `Io` because "cannot
+    /// reach the library" is the wrong sentence for a path the shell never resolved.
+    #[error("cannot read {path}: {source}")]
+    Unreadable {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(
         "{path} is not a valid library: {reason}; fix or move the file, it will not be overwritten"
     )]
@@ -325,8 +333,48 @@ impl Drop for StoreLock {
 
 /// Content identity for dedupe: the file's bytes, not its name or mtime.
 pub fn hash_file(path: &Path) -> Result<String, StoreError> {
-    let bytes = fs::read(path).map_err(|source| StoreError::Io { source })?;
+    let bytes = fs::read(path).map_err(|source| StoreError::Unreadable {
+        path: describe_path(path),
+        source,
+    })?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+/// The path as the filesystem saw it, not as it was typed.
+///
+/// A relative path resolves against the real working directory, and `~/git/libretto`
+/// is a symlink into a sandbox — so `../../Downloads/book.pdf` can mean something very
+/// different from what the prompt suggests. Printing the resolved path is what turns
+/// "no such file" into "that is not where you think you are".
+fn describe_path(path: &Path) -> String {
+    let resolved = std::fs::canonicalize(path).ok().or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .map(|directory| lexical(&directory.join(path)))
+    });
+    match resolved {
+        Some(absolute) if absolute != path => {
+            format!("{} (resolved to {})", path.display(), absolute.display())
+        }
+        _ => path.display().to_string(),
+    }
+}
+
+/// `a/b/../c` → `a/c`, so the reported path is one a person can read. `..` at the
+/// root is dropped, which is what the kernel does too.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// A readable, stable id: `grokking-algorithms-2nd-9f3a`. The hash suffix keeps

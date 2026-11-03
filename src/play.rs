@@ -11,11 +11,14 @@ use std::sync::mpsc;
 use thiserror::Error;
 
 use crate::cache::{Cache, CacheError};
-use crate::tts::{SpeechRequest, TtsEngine};
+use crate::tts::{SpeechRequest, TtsEngine, TtsError};
 
 /// How far ahead the synthesizer may run. Synthesis is 4–5× faster than speech,
 /// so a small lead is enough and it bounds memory and cache churn.
-pub const DEFAULT_LEAD: usize = 5;
+const DEFAULT_LEAD: usize = 5;
+
+/// How many unusable sentences in a row before the endpoint, not the text, is to blame.
+const MAX_SILENT_SENTENCES: usize = 5;
 
 #[derive(Debug, Error)]
 pub enum PlayError {
@@ -76,6 +79,8 @@ pub struct Played {
     pub count: usize,
     /// How many came from the cache (the rest were synthesized).
     pub cache_hits: usize,
+    /// Sentences the engine could not voice, and which were stepped over.
+    pub skipped: usize,
 }
 
 /// The collaborators one playback run needs. Grouped so the function below keeps
@@ -115,11 +120,14 @@ pub fn play_sentences(
             next: begin,
             count: 0,
             cache_hits: 0,
+            skipped: 0,
         });
     }
 
     let mut played = 0usize;
     let mut cache_hits = 0usize;
+    let mut skipped = 0usize;
+    let mut silent_run = 0usize;
     let mut next = begin;
 
     std::thread::scope(|scope| -> Result<(), PlayError> {
@@ -141,7 +149,25 @@ pub fn play_sentences(
         });
 
         for (index, hit, result) in rx {
-            let path = result?;
+            let path = match result {
+                Ok(path) => {
+                    silent_run = 0;
+                    path
+                }
+                // One fragment the engine cannot voice is not a broken book: skip it and
+                // keep reading. A run of them means the endpoint is the problem, so the
+                // error still surfaces instead of an hour of silence.
+                Err(CacheError::Tts(TtsError::Empty { .. }))
+                    if silent_run < MAX_SILENT_SENTENCES =>
+                {
+                    silent_run += 1;
+                    skipped += 1;
+                    next = index + 1;
+                    on_played(next);
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             player.play(&path)?;
             if hit {
                 cache_hits += 1;
@@ -158,6 +184,7 @@ pub fn play_sentences(
         next,
         count: played,
         cache_hits,
+        skipped,
     })
 }
 
@@ -210,6 +237,23 @@ mod tests {
     impl TtsEngine for CountingEngine {
         fn synthesize(&self, request: &SpeechRequest) -> Result<Vec<u8>, TtsError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(request.text.clone().into_bytes())
+        }
+    }
+
+    /// Answers with an empty body for any sentence containing `needle`, the way a real
+    /// engine answers a fragment with nothing to pronounce.
+    struct SilentFor {
+        needle: String,
+    }
+
+    impl TtsEngine for SilentFor {
+        fn synthesize(&self, request: &SpeechRequest) -> Result<Vec<u8>, TtsError> {
+            if request.text.contains(&self.needle) {
+                return Err(TtsError::Empty {
+                    endpoint: "fake".into(),
+                });
+            }
             Ok(request.text.clone().into_bytes())
         }
     }
@@ -319,6 +363,66 @@ mod tests {
             positions,
             vec![1],
             "only the finished sentence was reported"
+        );
+    }
+
+    #[test]
+    fn one_unvoiceable_fragment_is_stepped_over_instead_of_ending_the_book() {
+        let engine = SilentFor {
+            needle: "noise".into(),
+        };
+        let player = recording_player(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::at(dir.path());
+        let template = SpeechRequest::new("");
+        let session = Session {
+            engine: &engine,
+            player: &player,
+            cache: &cache,
+            template: &template,
+        };
+        let lines = vec![
+            "Sentence 0.".to_string(),
+            "noise only".to_string(),
+            "Sentence 2.".to_string(),
+        ];
+        let mut positions = Vec::new();
+
+        let result = play_sentences(&session, &lines, 0, None, |next| positions.push(next))
+            .expect("the book continues");
+
+        assert_eq!(result.count, 2, "two sentences were played");
+        assert_eq!(result.skipped, 1, "the fragment was stepped over");
+        assert_eq!(result.next, 3, "and the position moved past it");
+        assert_eq!(positions, vec![1, 2, 3], "{positions:?}");
+        assert_eq!(player.played.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_run_of_silent_replies_still_reports_the_endpoint_as_broken() {
+        let engine = SilentFor {
+            needle: "Sentence".into(),
+        };
+        let player = recording_player(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::at(dir.path());
+        let template = SpeechRequest::new("");
+        let session = Session {
+            engine: &engine,
+            player: &player,
+            cache: &cache,
+            template: &template,
+        };
+
+        let error = play_sentences(&session, &sentences(20), 0, None, |_| {})
+            .expect_err("silence everywhere is a broken endpoint");
+
+        assert!(
+            matches!(
+                error,
+                PlayError::Cache(CacheError::Tts(TtsError::Empty { .. }))
+            ),
+            "got {error}"
         );
     }
 }
