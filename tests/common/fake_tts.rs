@@ -3,15 +3,25 @@
 //! Tests must not need a real Kokoro: this counts requests, records the last
 //! request body, and answers with canned bytes — which is the only way "the
 //! second run issues zero requests" becomes an assertion instead of a hope.
+//!
+//! It speaks HTTP/1.1 properly: one connection carries several requests, because
+//! ureq pools connections. An earlier version answered one request per socket
+//! and closed, and the client raced it into `Broken pipe` on a slower runner —
+//! a defect in the fake that looked like a defect in the reader.
 
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+/// How long a connection may sit idle before we treat the client as done.
+const IDLE_TIMEOUT: Duration = Duration::from_millis(400);
+/// A request body larger than this is not a sentence; refuse instead of buffering.
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum Reply {
@@ -75,11 +85,12 @@ impl FakeTts {
         format!("{}/v1", self.base)
     }
 
+    /// Requests seen, across all connections.
     pub fn hits(&self) -> usize {
         self.hits.load(Ordering::SeqCst)
     }
 
-    /// The JSON body the engine sent last, for asserting what was asked for.
+    /// The JSON body of the most recent request, for asserting what was asked.
     pub fn last_body(&self) -> String {
         self.last_body
             .lock()
@@ -97,80 +108,90 @@ impl Drop for FakeTts {
     }
 }
 
+/// Serve requests on one connection until the client goes away or idles out.
 fn serve(
     mut stream: TcpStream,
     reply: &Reply,
     hits: &AtomicUsize,
     last_body: &Mutex<Vec<u8>>,
 ) -> std::io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 4096];
-    let mut body_start: Option<usize> = None;
-    let mut content_length = 0usize;
+    let _ = stream.set_read_timeout(Some(IDLE_TIMEOUT));
+    let mut buffer: Vec<u8> = Vec::new();
 
     loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(read) => {
-                buffer.extend_from_slice(&chunk[..read]);
-                if body_start.is_none()
-                    && let Some(head_end) = find(&buffer, b"\r\n\r\n")
-                {
-                    body_start = Some(head_end + 4);
-                    let head = String::from_utf8_lossy(&buffer[..head_end]).to_lowercase();
-                    content_length = head
-                        .lines()
-                        .find_map(|line| line.strip_prefix("content-length:"))
-                        .and_then(|value| value.trim().parse().ok())
-                        .unwrap_or(0);
-                }
-                if let Some(start) = body_start
-                    && buffer.len() >= start + content_length
-                {
-                    hits.fetch_add(1, Ordering::SeqCst);
-                    if let Ok(mut guard) = last_body.lock() {
-                        *guard = buffer[start..start + content_length].to_vec();
-                    }
-                    break;
-                }
+        // Headers: read until the blank line, or the client stops talking.
+        let head_end = loop {
+            if let Some(position) = find(&buffer, b"\r\n\r\n") {
+                break position;
             }
-            Err(_) => break,
-        }
-    }
+            if !read_more(&mut stream, &mut buffer)? {
+                return Ok(());
+            }
+        };
 
-    match reply {
-        Reply::Audio(bytes) => {
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                bytes.len()
-            );
-            write_response(&mut stream, head.as_bytes(), bytes);
+        let head = String::from_utf8_lossy(&buffer[..head_end]).to_lowercase();
+        let content_length: usize = head
+            .lines()
+            .find_map(|line| line.strip_prefix("content-length:"))
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0);
+        let body_start = head_end + 4;
+
+        if content_length > MAX_REQUEST_BYTES {
+            write_response(&mut stream, &Reply::Status(413));
+            return Ok(());
         }
-        Reply::Empty => {
-            write_response(
-                &mut stream,
-                b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                b"",
-            );
+
+        while buffer.len() < body_start + content_length {
+            if !read_more(&mut stream, &mut buffer)? {
+                return Ok(());
+            }
         }
-        Reply::Status(code) => {
-            let body = b"nope";
-            let head = format!(
-                "HTTP/1.1 {code} Nope\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            write_response(&mut stream, head.as_bytes(), body);
+
+        let body = buffer[body_start..body_start + content_length].to_vec();
+        buffer.drain(..body_start + content_length);
+
+        hits.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut guard) = last_body.lock() {
+            *guard = body;
         }
+
+        // No `Connection: close`: the client is allowed to reuse this socket, and
+        // we keep looping for its next request.
+        write_response(&mut stream, reply);
     }
-    Ok(())
+}
+
+/// `true` while more bytes arrived; `false` on EOF or an idle timeout.
+fn read_more(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> std::io::Result<bool> {
+    let mut chunk = [0u8; 8192];
+    match stream.read(&mut chunk) {
+        Ok(0) => Ok(false),
+        Ok(read) => {
+            buffer.extend_from_slice(&chunk[..read]);
+            Ok(true)
+        }
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// A client that hits its own read limit closes the socket mid-body, so a write
 /// error here is the expected outcome and must not fail the fake: the test is
 /// about the client's ceiling, not about how the server dies.
-fn write_response(stream: &mut TcpStream, head: &[u8], body: &[u8]) {
-    if stream.write_all(head).is_err() {
+fn write_response(stream: &mut TcpStream, reply: &Reply) {
+    let (status, body): (String, &[u8]) = match reply {
+        Reply::Audio(bytes) => ("200 OK".to_string(), bytes),
+        Reply::Empty => ("200 OK".to_string(), b""),
+        Reply::Status(code) => (format!("{code} Fake"), b"nope"),
+    };
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    if stream.write_all(head.as_bytes()).is_err() {
         return;
     }
     for chunk in body.chunks(64 * 1024) {
