@@ -47,6 +47,34 @@ fn second_pass_over_a_chapter_issues_no_requests() {
 }
 
 #[test]
+fn a_slow_client_keeps_its_connection_open() {
+    // The client fsyncs each mp3 before asking for the next sentence, and on a
+    // loaded runner that gap is longer than the 400 ms idle timeout the fake
+    // server used to have — which closed a live pooled socket and surfaced as
+    // "io: Peer disconnected". Asserting request count alone does not catch it,
+    // because ureq silently reconnects; asserting the connection count does.
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let engine = Kokoro::new(fake.endpoint()).expect("engine");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::at(dir.path());
+
+    cache
+        .audio_for(&engine, &SpeechRequest::new("First sentence."))
+        .expect("first request");
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    cache
+        .audio_for(&engine, &SpeechRequest::new("Second sentence."))
+        .expect("a pooled connection must survive a slow client");
+
+    assert_eq!(fake.hits(), 2, "both requests reached the server");
+    assert_eq!(
+        fake.connections(),
+        1,
+        "one socket served both: a second connection means the server hung up on a slow client"
+    );
+}
+
+#[test]
 fn a_different_voice_is_a_different_entry() {
     let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
     let engine = Kokoro::new(fake.endpoint()).expect("engine");
