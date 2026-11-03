@@ -279,6 +279,12 @@ impl Store {
 
 /// Is the process that wrote this lock still running?
 fn lock_is_live(path: &Path) -> bool {
+    lock_is_live_in(path, Path::new("/proc"))
+}
+
+/// The `/proc` root is a parameter so the "cannot tell" branch is testable on
+/// Linux, where it would otherwise only ever run on someone else's machine.
+fn lock_is_live_in(path: &Path, proc_root: &Path) -> bool {
     let Ok(text) = fs::read_to_string(path) else {
         return false; // unreadable lock: treat as stale rather than wedging
     };
@@ -288,10 +294,10 @@ fn lock_is_live(path: &Path) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    if !Path::new("/proc").is_dir() {
+    if !proc_root.is_dir() {
         return true; // no way to tell: assume live, refuse rather than double-play
     }
-    Path::new(&format!("/proc/{pid}")).exists()
+    proc_root.join(pid.to_string()).exists()
 }
 
 /// The library lists what someone reads, so keep it private to them.
@@ -435,10 +441,42 @@ mod tests {
         // pid 4194304 is above the usual pid_max: no such process
         std::fs::write(dir.path().join("library.lock"), b"4194304\n").expect("write lock");
 
-        assert!(
-            store.lock().is_ok(),
-            "a killed reader must not wedge the tool"
-        );
+        let recovered = store.lock().is_ok();
+
+        if cfg!(target_os = "linux") {
+            assert!(recovered, "a killed reader must not wedge the tool");
+        } else {
+            // Without /proc there is no way to prove a pid is dead, so the
+            // documented behaviour is to assume the lock is live. The macOS CI
+            // job asserts that refusal instead of demanding recovery.
+            assert!(
+                !recovered,
+                "no /proc means assume live, never steal a possibly-live lock"
+            );
+            assert!(matches!(store.lock(), Err(StoreError::AlreadyLocked)));
+        }
+    }
+
+    #[test]
+    fn without_a_proc_root_a_foreign_pid_is_assumed_alive() {
+        // This is the macOS path, exercised on Linux by pointing the check at a
+        // directory that does not exist. Refusing is the safe answer: stealing a
+        // live lock means two readers on one position.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("library.lock");
+        std::fs::write(&lock, b"4194304\n").expect("write lock");
+        let absent_proc = dir.path().join("no-proc-here");
+
+        assert!(lock_is_live_in(&lock, &absent_proc));
+    }
+
+    #[test]
+    fn our_own_pid_is_always_live() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lock = dir.path().join("library.lock");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).expect("write lock");
+        assert!(lock_is_live_in(&lock, &dir.path().join("no-proc-here")));
+        assert!(lock_is_live(&lock));
     }
 
     #[test]
