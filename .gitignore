@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+.env
+*.mp3
+*.m4b
+# never commit books; tests/fixtures are the only exception
+*.epub
+!tests/fixtures/*.epub
+.DS_Store
