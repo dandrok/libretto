@@ -2,6 +2,10 @@
 //!
 //! Only what the speaker needs is extracted — title, author, and chapters in
 //! spine order. Nothing here writes to disk, and nothing is decoded twice.
+//!
+//! The file is untrusted input, so every entry is read with a ceiling: a zip
+//! header can *declare* an uncompressed size of 40 GB in a 3 KB file, and
+//! trusting that number is how a book turns into an out-of-memory abort.
 
 use std::fs::File;
 use std::io::Read;
@@ -10,6 +14,11 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::text;
+
+/// Largest single entry (chapter, package document, stylesheet) we will inflate.
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+/// Largest amount of prose one book may produce in total.
+const MAX_BOOK_PROSE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum EpubError {
@@ -25,6 +34,8 @@ pub enum EpubError {
     Missing { what: &'static str },
     #[error("cannot parse {what}: {reason}")]
     Xml { what: &'static str, reason: String },
+    #[error("{entry} unpacks to more than {limit_bytes} bytes; refusing to read it")]
+    TooLarge { entry: String, limit_bytes: u64 },
     #[error("this EPUB has encrypted content; only unencrypted books are supported")]
     Encrypted,
     #[error("the EPUB has no readable chapters")]
@@ -77,6 +88,7 @@ pub fn load(path: &Path) -> Result<Book, EpubError> {
         .unwrap_or_else(|| fallback_title(path));
 
     let mut chapters = Vec::with_capacity(package.spine.len());
+    let mut prose_bytes: u64 = 0;
     for idref in &package.spine {
         let Some(item) = package.items.iter().find(|item| &item.id == idref) else {
             continue;
@@ -95,6 +107,13 @@ pub fn load(path: &Path) -> Result<Book, EpubError> {
         );
         if body.is_empty() {
             continue; // a chapter that is only an image says nothing
+        }
+        prose_bytes += body.len() as u64;
+        if prose_bytes > MAX_BOOK_PROSE_BYTES {
+            return Err(EpubError::TooLarge {
+                entry: "the book's prose".to_string(),
+                limit_bytes: MAX_BOOK_PROSE_BYTES,
+            });
         }
         chapters.push(Chapter {
             title: heading(&markup, &title, package.author.as_deref()),
@@ -120,6 +139,11 @@ fn fallback_title(path: &Path) -> String {
         .to_string()
 }
 
+/// Read one archive entry, refusing anything that inflates past the ceiling.
+///
+/// The declared size is checked first so an absurd header fails before a
+/// single byte is allocated, and the read itself is bounded so a lying header
+/// cannot win either.
 fn read_entry(
     archive: &mut zip::ZipArchive<File>,
     name: &str,
@@ -127,14 +151,28 @@ fn read_entry(
 ) -> Result<Option<String>, EpubError> {
     match archive.by_name(name) {
         Ok(mut entry) => {
-            let mut buf = String::with_capacity(entry.size() as usize);
+            if entry.size() > MAX_ENTRY_BYTES {
+                return Err(EpubError::TooLarge {
+                    entry: name.to_string(),
+                    limit_bytes: MAX_ENTRY_BYTES,
+                });
+            }
+            let mut bytes = Vec::with_capacity(entry.size().min(MAX_ENTRY_BYTES) as usize);
             entry
-                .read_to_string(&mut buf)
+                .by_ref()
+                .take(MAX_ENTRY_BYTES + 1)
+                .read_to_end(&mut bytes)
                 .map_err(|source| EpubError::Io {
                     path: shown.to_string(),
                     source,
                 })?;
-            Ok(Some(buf))
+            if bytes.len() as u64 > MAX_ENTRY_BYTES {
+                return Err(EpubError::TooLarge {
+                    entry: name.to_string(),
+                    limit_bytes: MAX_ENTRY_BYTES,
+                });
+            }
+            Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
         }
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(e) => Err(EpubError::Archive {

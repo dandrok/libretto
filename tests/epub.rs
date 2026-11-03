@@ -257,6 +257,70 @@ fn reports_a_book_with_no_readable_chapters() {
 }
 
 #[test]
+fn refuses_an_entry_that_decompresses_past_the_ceiling() {
+    // 20 MiB of zeros is a few KB in the container but 20 MiB in memory: the
+    // declared size is attacker-controlled, so the read has to be bounded.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("bomb.epub");
+    let package = opf(
+        Some("Bomb"),
+        &["c1"],
+        &[("c1", "ch1.xhtml", "application/xhtml+xml")],
+    );
+    let payload = "a".repeat(20 * 1024 * 1024);
+
+    let file = File::create(&path).expect("create");
+    let mut zip = zip::ZipWriter::new(file);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file("META-INF/container.xml", stored)
+        .expect("start");
+    zip.write_all(CONTAINER.as_bytes()).expect("write");
+    zip.start_file("OEBPS/content.opf", stored).expect("start");
+    zip.write_all(package.as_bytes()).expect("write");
+    zip.start_file("OEBPS/ch1.xhtml", deflated).expect("start");
+    zip.write_all(payload.as_bytes()).expect("write");
+    zip.finish().expect("finish");
+
+    assert!(
+        matches!(epub::load(&path), Err(EpubError::TooLarge { .. })),
+        "an entry that inflates to 20 MiB must be refused, not allocated"
+    );
+}
+
+#[test]
+fn accepts_a_chapter_far_below_the_ceiling() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big-but-fine.epub");
+    let package = opf(
+        Some("Big"),
+        &["c1"],
+        &[("c1", "ch1.xhtml", "application/xhtml+xml")],
+    );
+    let prose = "word ".repeat(200_000); // ~1 MB, a long chapter, not an attack
+
+    let file = File::create(&path).expect("create");
+    let mut zip = zip::ZipWriter::new(file);
+    let deflated = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    zip.start_file("META-INF/container.xml", deflated)
+        .expect("start");
+    zip.write_all(CONTAINER.as_bytes()).expect("write");
+    zip.start_file("OEBPS/content.opf", deflated)
+        .expect("start");
+    zip.write_all(package.as_bytes()).expect("write");
+    zip.start_file("OEBPS/ch1.xhtml", deflated).expect("start");
+    zip.write_all(chapter("Long", &prose).as_bytes())
+        .expect("write");
+    zip.finish().expect("finish");
+
+    let book = epub::load(&path).expect("a 1 MB chapter is a normal book");
+    assert!(book.chapters[0].text.len() > 100_000);
+}
+
+#[test]
 fn reports_a_file_that_is_not_an_epub() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("notes.epub");
