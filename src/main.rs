@@ -16,6 +16,7 @@ use libretto::cache::{Cache, CacheError};
 use libretto::config::{self, Overrides, Settings};
 use libretto::doctor;
 use libretto::epub::{self, EpubError};
+use libretto::pdf::{self, PdfError};
 use libretto::play::{self, Mpv, PlayError};
 use libretto::store::{self, BookRecord, Library, Progress, Store, StoreError};
 use libretto::text;
@@ -135,6 +136,18 @@ fn resume(store: &Store) -> Result<(), AppError> {
     )
 }
 
+/// Both formats end up as the same `Book`; only the reader of the container differs.
+fn load_book(path: &Path) -> Result<epub::Book, AppError> {
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    Ok(match extension.as_str() {
+        "pdf" => pdf::load(path).map_err(AppError::Pdf)?,
+        _ => epub::load(path)?,
+    })
+}
+
 fn add(store: &Store, path: &Path) -> Result<(), AppError> {
     let hash = store::hash_file(path)?;
     let mut library = store.load()?;
@@ -148,7 +161,7 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
         return Ok(());
     }
 
-    let book = epub::load(path)?;
+    let book = load_book(path)?;
     let id = store::make_id(&book.title, &hash);
     let source_path = std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
@@ -223,7 +236,7 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
     // The path came out of the library file, so check it still is the book that
     // was indexed: a tampered library must not turn into "read me that file".
     verify_unchanged(&book_path, &record)?;
-    let book = epub::load(&book_path)?;
+    let book = load_book(&book_path)?;
     let progress = library.progress_of(&record.id);
 
     let chapter_index = request
@@ -408,6 +421,7 @@ enum AppError {
         path: String,
         reason: String,
     },
+    Pdf(PdfError),
     /// `doctor` found a failing check; the report was already printed.
     Unhealthy,
 }
@@ -437,6 +451,8 @@ impl AppError {
             },
             AppError::Config(_) => EXIT_STATE,
             AppError::BookChanged { .. } => EXIT_BAD_BOOK,
+            AppError::Pdf(PdfError::NoTool) => EXIT_STATE,
+            AppError::Pdf(_) => EXIT_BAD_BOOK,
             AppError::Unhealthy => EXIT_STATE,
         }
     }
@@ -455,6 +471,7 @@ impl fmt::Display for AppError {
                 f,
                 "{path}: {reason}; re-index it with `libretto add <path>`"
             ),
+            AppError::Pdf(error) => write!(f, "{error}"),
             AppError::Unhealthy => write!(f, "one or more checks failed"),
         }
     }

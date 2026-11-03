@@ -44,6 +44,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # PDF import shells out to poppler, which the runners do not always carry. The
+      # PDF tests skip when it is missing, which would quietly shrink coverage.
+      - name: install poppler (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+      - name: install poppler (macOS)
+        if: runner.os == 'macOS'
+        run: brew install poppler
       - run: cargo test --all-features
 
   msrv:

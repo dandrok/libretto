@@ -10,6 +10,7 @@ pub mod config;
 pub mod doctor;
 pub mod epub;
 pub mod paths;
+pub mod pdf;
 pub mod play;
 pub mod store;
 pub mod text;

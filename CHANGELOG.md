@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- PDF import: `libretto add book.pdf` reads PDFs that have a text layer, with chapters
+  taken from the running head, page numbers and figure captions dropped, wrapped lines
+  rejoined and ligatures repaired.
+- Scans and two-column layouts are refused with a reason instead of producing word
+  salad. `cargo run --example chapters -- book.pdf` shows what an import produced
+  before you listen to it.
+- `tests/fixtures/*.pdf`: PDFs generated with ghostscript, so the PDF tests do not
+  depend on a book anyone happens to own.
+
 ## [1.0.0] - 2026-11-03
 
 First release. EPUB only; PDF is next.

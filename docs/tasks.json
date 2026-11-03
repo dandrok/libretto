@@ -129,6 +129,25 @@
         "T4"
       ],
       "status": "done"
+    },
+    {
+      "id": "T8",
+      "title": "PDF import: text layer, running heads, ligatures, layout guard",
+      "files_in_scope": [
+        "src/pdf.rs",
+        "src/main.rs",
+        "examples/chapters.rs",
+        "tests/pdf.rs",
+        "tests/fixtures/"
+      ],
+      "done_criteria": [
+        "AC-13"
+      ],
+      "depends_on": [
+        "T1",
+        "T2"
+      ],
+      "status": "done"
     }
   ]
 }

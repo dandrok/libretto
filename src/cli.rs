@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "libretto",
     version,
-    about = "Read EPUB books aloud, from where you stopped",
+    about = "Read books aloud from the terminal, from where you stopped",
     long_about = None,
 )]
 pub struct Cli {
@@ -19,9 +19,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Add an EPUB to the library
+    /// Add a book to the library (EPUB, or a PDF with a text layer)
     Add {
-        /// Path to a DRM-free .epub
+        /// Path to a DRM-free .epub, or a .pdf whose text can be extracted
         path: PathBuf,
     },
     /// List the library with reading progress

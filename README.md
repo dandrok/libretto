@@ -32,7 +32,8 @@ it resumes the last book.
   shim, another machine on your LAN).
 - **A player.** `mpv` by default; `--player` takes any program that plays a file and
   exits (it receives `--no-video --really-quiet <file>`, so it expects mpv's flags).
-- **An EPUB.** DRM-free; PDF and MOBI are not supported.
+- **A book.** A DRM-free EPUB, or a PDF that has a text layer (poppler's
+  `pdftotext` reads it). MOBI and AZW are not supported.
 
 ## Install
 
@@ -44,7 +45,7 @@ install -m755 target/release/libretto ~/.local/bin/
 ## Use
 
 ```bash
-libretto add path/to/book.epub      # index it
+libretto add path/to/book.epub      # or book.pdf
 libretto ls                         # what is in the library, with progress
 libretto read <id>                  # speak it from where you stopped
 libretto                             # same, for the last book you read
@@ -101,9 +102,24 @@ prefetch = 5
 | 5 | another reader holds the lock |
 | 6 | state problem (library, config, player) — `libretto doctor` explains |
 
+## PDFs
+
+`libretto add book.pdf` works when the PDF has a text layer, and it is honest about what
+it can follow:
+
+- **Works:** single-column text PDFs. Chapters come from the running head at the top of
+  each page, which changes exactly at a chapter boundary; page numbers, figure captions
+  and the table of contents are dropped rather than read aloud; words broken across
+  lines are rejoined and ligatures repaired (`workﬂow` → `workflow`).
+- **Refused, with a reason:** scans with no text layer, and two-column or complex
+  layouts, which the extraction interleaves into word salad.
+- **Expect some noise:** a stray "Part I" or "CONTENTS" group. `cargo run --example
+  chapters -- book.pdf` prints what the import produced before you listen to it for
+  eight hours.
+
 ## What it does not do
 
-PDF, `.m4b` export, cross-device sync, a full-screen UI. The cache is disposable:
+MOBI/AZW, `.m4b` export, cross-device sync, a full-screen UI. The cache is disposable:
 delete `~/.cache/libretto` any time.
 
 ## License
