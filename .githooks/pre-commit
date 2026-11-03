@@ -1,0 +1,5 @@
+#!/bin/sh
+# pre-commit: formatting and lints are not negotiable
+set -e
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings

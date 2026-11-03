@@ -1,0 +1,4 @@
+#!/bin/sh
+# pre-push: the suite must be green before it leaves this machine
+set -e
+cargo test --all-features
