@@ -1,7 +1,7 @@
 {
   "tasks": [
     { "id": "T1", "title": "EPUB parsing and sentence splitting",
-      "files_in_scope": ["src/epub.rs", "src/text.rs", "tests/split.rs"],
+      "files_in_scope": ["src/epub.rs", "src/text.rs", "src/lib.rs", "examples/inspect.rs", "tests/split.rs", "tests/epub.rs", "tests/running_heads.rs"],
       "done_criteria": ["AC-1", "AC-9", "AC-11"], "depends_on": [] },
     { "id": "T2", "title": "Library store: atomic JSON, dedupe, lock",
       "files_in_scope": ["src/store.rs", "tests/cli_add.rs", "tests/cli_ls.rs"],
