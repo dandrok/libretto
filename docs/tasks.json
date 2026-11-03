@@ -1,22 +1,108 @@
 {
   "tasks": [
-    { "id": "T1", "title": "EPUB parsing and sentence splitting",
-      "files_in_scope": ["src/epub.rs", "src/text.rs", "src/lib.rs", "examples/inspect.rs", "tests/split.rs", "tests/epub.rs", "tests/running_heads.rs"],
-      "done_criteria": ["AC-1", "AC-9", "AC-11"], "depends_on": [] },
-    { "id": "T2", "title": "Library store: atomic JSON, dedupe, lock",
-      "files_in_scope": ["src/store.rs", "tests/cli_add.rs", "tests/cli_ls.rs"],
-      "done_criteria": ["AC-1", "AC-2", "AC-3", "AC-12"], "depends_on": ["T1"] },
-    { "id": "T3", "title": "CLI surface and prefix resolution",
-      "files_in_scope": ["src/cli.rs", "src/main.rs", "tests/cli_read.rs"],
-      "done_criteria": ["AC-3", "AC-4"], "depends_on": ["T2"] },
-    { "id": "T4", "title": "TTS client and content-addressed audio cache",
-      "files_in_scope": ["src/tts.rs", "src/cache.rs", "tests/cache.rs", "tests/tts_down.rs"],
-      "done_criteria": ["AC-5", "AC-7"], "depends_on": [] },
-    { "id": "T5", "title": "Playback loop, resume and skip",
-      "files_in_scope": ["src/play.rs", "tests/resume.rs", "tests/skip.rs"],
-      "done_criteria": ["AC-6", "AC-8"], "depends_on": ["T3", "T4"] },
-    { "id": "T6", "title": "Performance harness for ls at 50 books",
-      "files_in_scope": ["tests/perf.rs"],
-      "done_criteria": ["AC-10"], "depends_on": ["T2"] }
+    {
+      "id": "T1",
+      "title": "EPUB parsing and sentence splitting",
+      "files_in_scope": [
+        "src/epub.rs",
+        "src/text.rs",
+        "src/lib.rs",
+        "examples/inspect.rs",
+        "tests/split.rs",
+        "tests/epub.rs",
+        "tests/running_heads.rs"
+      ],
+      "done_criteria": [
+        "AC-1",
+        "AC-9",
+        "AC-11"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T2",
+      "title": "Library store, add/ls/rm and the CLI skeleton",
+      "files_in_scope": [
+        "src/store.rs",
+        "src/paths.rs",
+        "src/cli.rs",
+        "src/main.rs",
+        "src/lib.rs",
+        "tests/common/mod.rs",
+        "tests/cli_add.rs",
+        "tests/cli_ls.rs"
+      ],
+      "done_criteria": [
+        "AC-1",
+        "AC-2",
+        "AC-3",
+        "AC-11",
+        "AC-12"
+      ],
+      "depends_on": [
+        "T1"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "read command: prefix resolution and argument surface",
+      "files_in_scope": [
+        "src/cli.rs",
+        "src/main.rs",
+        "tests/cli_read.rs"
+      ],
+      "done_criteria": [
+        "AC-3",
+        "AC-4"
+      ],
+      "depends_on": [
+        "T2"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "TTS client and content-addressed audio cache",
+      "files_in_scope": [
+        "src/tts.rs",
+        "src/cache.rs",
+        "tests/cache.rs",
+        "tests/tts_down.rs"
+      ],
+      "done_criteria": [
+        "AC-5",
+        "AC-7"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "T5",
+      "title": "Playback loop, resume and skip",
+      "files_in_scope": [
+        "src/play.rs",
+        "tests/resume.rs",
+        "tests/skip.rs"
+      ],
+      "done_criteria": [
+        "AC-6",
+        "AC-8"
+      ],
+      "depends_on": [
+        "T3",
+        "T4"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Performance harness for ls at 50 books",
+      "files_in_scope": [
+        "tests/perf.rs"
+      ],
+      "done_criteria": [
+        "AC-10"
+      ],
+      "depends_on": [
+        "T2"
+      ]
+    }
   ]
 }
