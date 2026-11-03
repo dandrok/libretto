@@ -80,6 +80,45 @@ impl Sandbox {
         self.root.path().join("data/libretto/library.json")
     }
 
+    /// The directory the binary treats as `$XDG_DATA_HOME/libretto`.
+    pub fn data_dir(&self) -> PathBuf {
+        self.root.path().join("data/libretto")
+    }
+
+    /// Pre-fill the library without importing 50 EPUBs: `ls` only reads the
+    /// index, so the index is what a performance test should build.
+    pub fn seed_library(&self, count: usize) {
+        use libretto::store::{BookRecord, Library, Progress, Store, now_seconds};
+
+        let mut library = Library::default();
+        for index in 0..count {
+            let id = format!("book-{index:02}-aaaa");
+            library.insert(BookRecord {
+                id: id.clone(),
+                title: format!("Book number {index} with a title of realistic length"),
+                author: Some("An Author".to_string()),
+                source_path: format!("/books/{index}.epub"),
+                content_hash: format!("hash{index:04}"),
+                chapter_count: 12,
+                added_at: now_seconds(),
+            });
+            if index % 2 == 0 {
+                library.progress.insert(
+                    id,
+                    Progress {
+                        chapter_index: index % 12,
+                        sentence_index: index * 3,
+                        updated_at: now_seconds(),
+                    },
+                );
+            }
+        }
+        library.last_read = Some("book-00-aaaa".to_string());
+        Store::at(self.data_dir())
+            .save(&library)
+            .expect("seed library");
+    }
+
     pub fn root(&self) -> &Path {
         self.root.path()
     }

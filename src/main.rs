@@ -14,6 +14,7 @@ use clap::Parser;
 
 use libretto::cache::{Cache, CacheError};
 use libretto::config::{self, Overrides, Settings};
+use libretto::doctor;
 use libretto::epub::{self, EpubError};
 use libretto::play::{self, Mpv, PlayError};
 use libretto::store::{self, BookRecord, Library, Progress, Store, StoreError};
@@ -81,8 +82,27 @@ fn run() -> Result<(), AppError> {
                 prefetch,
             },
         ),
+        Some(Command::Doctor { endpoint, player }) => check(Overrides {
+            endpoint,
+            player,
+            ..Overrides::default()
+        }),
         // Bare `libretto` resumes the last book: the common case, one word.
         None => resume(&store),
+    }
+}
+
+/// `libretto doctor`: every silent-reader cause in one report.
+fn check(overrides: Overrides) -> Result<(), AppError> {
+    let settings = Settings::resolve(&config::load()?, overrides);
+    let report = doctor::run(&settings);
+    for line in report.lines() {
+        println!("{line}");
+    }
+    if report.all_ok() {
+        Ok(())
+    } else {
+        Err(AppError::Unhealthy)
     }
 }
 
@@ -388,6 +408,8 @@ enum AppError {
         path: String,
         reason: String,
     },
+    /// `doctor` found a failing check; the report was already printed.
+    Unhealthy,
 }
 
 impl AppError {
@@ -415,6 +437,7 @@ impl AppError {
             },
             AppError::Config(_) => EXIT_STATE,
             AppError::BookChanged { .. } => EXIT_BAD_BOOK,
+            AppError::Unhealthy => EXIT_STATE,
         }
     }
 }
@@ -432,6 +455,7 @@ impl fmt::Display for AppError {
                 f,
                 "{path}: {reason}; re-index it with `libretto add <path>`"
             ),
+            AppError::Unhealthy => write!(f, "one or more checks failed"),
         }
     }
 }
