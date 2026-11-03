@@ -31,4 +31,39 @@ pub enum Command {
         /// Full id or any unique prefix
         id: String,
     },
+    /// Read a book aloud from where you stopped (default: the last book)
+    Read {
+        /// Full id or any unique prefix
+        id: Option<String>,
+        /// Start at this chapter (1-based), ignoring the stored position
+        #[arg(long)]
+        chapter: Option<usize>,
+        /// Start this many sentences after the stored position
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Replay this many sentences before the stored position
+        #[arg(long, default_value_t = 0)]
+        rewind: usize,
+        /// Stop after this many sentences
+        #[arg(long)]
+        sentences: Option<usize>,
+        /// Voice name, e.g. af_heart
+        #[arg(long)]
+        voice: Option<String>,
+        /// Speech speed multiplier, 0.25 to 4.0
+        #[arg(long)]
+        speed: Option<f32>,
+        /// TTS base URL, e.g. http://127.0.0.1:8880/v1
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// Model name sent to the endpoint
+        #[arg(long)]
+        model: Option<String>,
+        /// Player program (default mpv)
+        #[arg(long)]
+        player: Option<String>,
+        /// Sentences to synthesize ahead
+        #[arg(long)]
+        prefetch: Option<usize>,
+    },
 }

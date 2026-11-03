@@ -65,7 +65,10 @@ pub enum TtsError {
 const MAX_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Anything that can turn a sentence into mp3 bytes.
-pub trait TtsEngine {
+///
+/// `Send + Sync` because the playback loop synthesizes on a worker thread while
+/// the main thread plays: engines are shared, not owned per sentence.
+pub trait TtsEngine: Send + Sync {
     fn synthesize(&self, request: &SpeechRequest) -> Result<Vec<u8>, TtsError>;
 }
 
