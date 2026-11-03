@@ -6,4 +6,6 @@
 #![forbid(unsafe_code)]
 
 pub mod epub;
+pub mod paths;
+pub mod store;
 pub mod text;

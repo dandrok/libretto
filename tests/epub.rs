@@ -3,61 +3,13 @@
 //!
 //! Every fixture is built in a temp dir, so no book is ever committed.
 
+mod common;
+
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 
+use common::{CONTAINER, chapter, opf, write_epub};
 use libretto::epub::{self, EpubError};
-
-const CONTAINER: &str = r#"<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#;
-
-fn write_epub(path: &Path, entries: &[(&str, &str)]) {
-    let file = File::create(path).expect("create epub");
-    let mut zip = zip::ZipWriter::new(file);
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, body) in entries {
-        zip.start_file(*name, options).expect("start entry");
-        zip.write_all(body.as_bytes()).expect("write entry");
-    }
-    zip.finish().expect("finish epub");
-}
-
-fn opf(title: Option<&str>, spine: &[&str], manifest: &[(&str, &str, &str)]) -> String {
-    let title = title
-        .map(|t| format!("<dc:title>{t}</dc:title>"))
-        .unwrap_or_default();
-    let items: String = manifest
-        .iter()
-        .map(|(id, href, media)| format!(r#"<item id="{id}" href="{href}" media-type="{media}"/>"#))
-        .collect();
-    let refs: String = spine
-        .iter()
-        .map(|id| format!(r#"<itemref idref="{id}"/>"#))
-        .collect();
-    format!(
-        r#"<?xml version="1.0"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    {title}<dc:creator>Ursula K. Le Guin</dc:creator>
-  </metadata>
-  <manifest>{items}</manifest>
-  <spine>{refs}</spine>
-</package>"#
-    )
-}
-
-fn chapter(heading: &str, prose: &str) -> String {
-    format!(
-        r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>
-<h1>{heading}</h1><p>{prose}</p></body></html>"#
-    )
-}
 
 #[test]
 fn loads_metadata_and_skips_image_only_chapters() {
