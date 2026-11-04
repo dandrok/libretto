@@ -33,7 +33,8 @@ it resumes the last book.
 - **A player.** `mpv` by default; `--player` takes any program that plays a file and
   exits (it receives `--no-video --really-quiet <file>`, so it expects mpv's flags).
 - **A book.** A DRM-free EPUB, or a PDF that has a text layer (poppler's
-  `pdftotext` reads it). MOBI and AZW are not supported.
+  `pdftotext` reads it; `pdfinfo` supplies the title when the file carries one).
+  MOBI and AZW are not supported.
 
 ## Install
 

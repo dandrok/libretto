@@ -8,7 +8,7 @@ Rename is one `sed` if you prefer `aloud` (also free) — everything else stays.
 - Rust, edition 2024, `rust-version = "1.99"` (what is installed), single binary
 - MSRV is a promise: CI has an `msrv` job that builds on the pinned version
 - No `unsafe`: `#![forbid(unsafe_code)]` in `main.rs`
-- Dependencies: clap (derive), serde, serde_json, toml, directories, reqwest (blocking + rustls),
+- Dependencies: clap (derive), serde, serde_json, toml, directories, ureq (blocking + rustls),
   zip, blake3, anyhow, thiserror. ten dependencies, no frameworks
 - Rejected on purpose: `confy` (no atomic write, no lock, stale), `rodio`/`symphonia`
   (decoding in-process is more code and worse device handling than mpv), any async runtime
@@ -16,7 +16,8 @@ Rename is one `sed` if you prefer `aloud` (also free) — everything else stays.
 
 ## 2. Scope of v1
 
-Reads EPUB v2/v3 aloud from a local library, remembers the position, works offline after first play.
+Reads EPUB v2/v3 and text-layer PDFs aloud from a local library, remembers the position,
+works offline after first play.
 
 - `libretto add <path>` — index an EPUB
 - `libretto ls` — library with progress
@@ -24,10 +25,12 @@ Reads EPUB v2/v3 aloud from a local library, remembers the position, works offli
 - `libretto rm <id>`
 - `libretto doctor` — mpv present? endpoint reachable? cache size?
 - bare `libretto` — resume the last book
-- Flags: `--voice --speed --endpoint --model --chapter --skip --no-cache --rewind`
+- Flags: `--voice --speed --endpoint --model --player --prefetch --chapter --skip --rewind --sentences`
 
-Not in v1: PDF/MOBI/AZW3, m4b export, sync, accounts, telemetry, any engine that is not
-OpenAI-compatible HTTP.
+Not: MOBI/AZW3, m4b export, sync, accounts, telemetry, any engine that is not
+OpenAI-compatible HTTP. (PDF was in the v1 cut line and arrived in 1.1.0 as an adapter
+beside the EPUB reader, which is why sentence splitting, cache keys, position and playback
+needed no change.)
 
 ## 3. CLI only. No TUI.
 
@@ -47,12 +50,18 @@ The rule: the terminal is for status, not for layout. Anyone wanting a TUI gets 
 Single crate, modules with a one-way dependency order:
 
 ```
-cli.rs  ->  commands/  ->  store.rs | epub.rs | play.rs
-                             |            |         |
-                          text.rs      cache.rs   tts.rs
-                                          \        /
-                                           traits
+cli.rs      clap types only
+main.rs     dispatch, and the one place an error becomes an exit code
+store.rs    library.json: load, save, lock            -> paths.rs  (every XDG path)
+epub.rs     EPUB -> Book                               -> text.rs   (splitting, furniture)
+pdf.rs      PDF  -> Book            (pdftotext, pdfinfo)
+play.rs     the playback loop, and the Player trait (mpv)
+cache.rs    content-addressed audio                    -> tts.rs    (TtsEngine, Kokoro)
 ```
+
+Both readers return the same `Book`, so splitting, cache keys, position and playback are
+written once. `TtsEngine` and `Player` live in the module they serve rather than in a
+`traits.rs`, so a fake is a two-line impl in the test that needs one.
 
 - `traits.rs` — `TtsEngine` and `Player`, so Kokoro, Edge, or a fake in tests are interchangeable
 - Errors: `thiserror` in each module, `anyhow` only in `main.rs`; every user-facing failure has an
@@ -68,8 +77,9 @@ cli.rs  ->  commands/  ->  store.rs | epub.rs | play.rs
 ## 5. Security standards
 
 - No network except the configured TTS endpoint; URL must parse as http/https, no other scheme
-- The only subprocess is `mpv`, resolved from `PATH`, argv built with `Command` — never a shell,
-  never a path from the library file or config
+- Subprocesses: `mpv` when reading, `pdftotext` and `pdfinfo` when importing a PDF. Each
+  resolved from `PATH`, argv built with `Command` — never a shell, never a path from the
+  library file or config
 - `add` canonicalises and opens the EPUB read-only; nothing is copied, nothing is rewritten
 - Writes only under `~/.local/share/libretto`, `~/.cache/libretto`, `~/.config/libretto`
 - Atomic writes (temp + rename) for `library.json`; a lock file for concurrent readers
@@ -78,7 +88,8 @@ cli.rs  ->  commands/  ->  store.rs | epub.rs | play.rs
 - Both scanners skip with a printed note when not installed locally; CI never skips
 - Dependency rule: no crate that is yanked, unmaintained, or untouched for 12 months
 - Tests never touch the network: a fake TTS server on a local port counts requests
-- The `security-review` skill runs on every PR before merge, not only when we suspect something
+- A security review runs on every PR before merge, not only when there is a suspicion, and its
+  outcome is written into the PR body: fixed, or accepted with the reason
 
 ## 6. Git and CI
 
