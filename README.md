@@ -1,5 +1,7 @@
 # libretto
 
+[![crates.io version](https://img.shields.io/crates/v/libretto.svg)](https://crates.io/crates/libretto)
+
 Listen to EPUB books from the terminal, in a good voice, starting where you stopped.
 
 It is for the books you keep meaning to read — the 25-hour technical ones — while you
@@ -38,7 +40,8 @@ it resumes the last book.
 
 ## Install
 
-One Rust binary, built once — there are no prebuilt downloads.
+One Rust binary, built once — crates.io carries the source, `cargo` compiles it while you
+install. There are no prebuilt downloads.
 
 **Rust 1.99 or newer.** `rustup` is the shortest path:
 
@@ -46,7 +49,16 @@ One Rust binary, built once — there are no prebuilt downloads.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-**Then build and install it:**
+**Then install it:**
+
+```bash
+cargo install --locked libretto
+```
+
+`cargo install` puts it in `~/.cargo/bin`, which `rustup` already keeps on your
+`PATH`. `--locked` builds against the dependency versions the crate was tested with.
+
+To track `main` instead of a release, build the checkout:
 
 ```bash
 git clone https://github.com/dandrok/libretto
@@ -54,9 +66,8 @@ cd libretto
 cargo install --path . --locked
 ```
 
-`cargo install` puts it in `~/.cargo/bin`, which `rustup` already keeps on your
-`PATH`. To install somewhere else instead — `~/.local/bin`, a container image —
-copy the release build:
+To install somewhere else instead — `~/.local/bin`, a container image — copy the
+release build:
 
 ```bash
 cargo build --release
@@ -71,7 +82,8 @@ libretto --version    # libretto 1.1.1
 libretto doctor
 ```
 
-Upgrading is the same steps: `git pull`, then `cargo install --path . --locked --force`.
+Upgrading is one command either way: `cargo install --locked libretto --force` from
+crates.io, or `git pull` then `cargo install --path . --locked --force` from a checkout.
 
 ## Use
 
