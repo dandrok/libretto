@@ -2,7 +2,9 @@
 
 Read `docs/spec.md` and `docs/decisions.md` before touching code.
 
-- One task from `docs/tasks.json` per branch and PR. Do not fold two tasks into one branch.
+- One concern per branch and PR, and say which slice it is in the PR body. Do not fold two
+  into one branch. The plan for a slice lives in its PR, not in a file in the tree: a plan
+  that finishes only drifts out of date (`docs/spec.md` is the contract).
 - Do not invent scope. If the spec is wrong, change the spec in its own commit and say so.
 - Tests come first and must fail for the right reason before the implementation exists.
 - Never `unwrap()` outside tests, never `unsafe`, never a shell command string.
