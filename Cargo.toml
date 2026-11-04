@@ -9,7 +9,6 @@ categories = ["command-line-utilities", "multimedia::audio", "text-processing"]
 exclude = [".githooks", ".github", "AGENTS.md", "deny.toml", "release-plz.toml", "docs"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/dandrok/libretto"
-publish = false
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

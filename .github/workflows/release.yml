@@ -6,8 +6,8 @@ name: release
 #   release-pr — otherwise open a PR that bumps the version and writes the next
 #              CHANGELOG section from the conventional commits since the last tag.
 #
-# The binary is not published to crates.io (publish = false), so there is no registry
-# step here by design.
+# The crate is published to crates.io from the release job below, using the
+# CARGO_REGISTRY_TOKEN secret (publish = true in release-plz.toml).
 
 on:
   push:
@@ -30,6 +30,9 @@ jobs:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without this line the secret exists but is never handed to release-plz,
+          # and the job fails at the upload step. Same env name cargo uses.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release-pr:
     name: open the next version PR
