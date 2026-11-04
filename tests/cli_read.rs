@@ -333,3 +333,57 @@ fn the_chapter_flag_starts_at_the_first_sentence_of_that_chapter() {
     assert_eq!(chapter, 1, "chapter two, zero-based");
     assert_eq!(sentence, 1, "one sentence into it");
 }
+
+/// AC-16, AC-17: the flourish belongs to terminals. A pipe gets the plain status
+/// line and no escapes, and `--quiet` is accepted and equally plain.
+#[test]
+fn a_piped_read_stays_plain_and_quiet_is_accepted() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "book.epub",
+        Some("Plain Output"),
+        &[("One", "First sentence here. Second one follows.")],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+    let endpoint = fake.endpoint();
+
+    let piped = sandbox.run(&read_args(
+        "plain",
+        &fake,
+        &["--endpoint", &endpoint, "--sentences", "1"],
+    ));
+    assert!(
+        piped.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&piped.stderr)
+    );
+    let status = String::from_utf8_lossy(&piped.stderr);
+    assert!(
+        !status.contains('\x1b'),
+        "a pipe must not receive escapes: {status:?}"
+    );
+    assert!(
+        !status.contains("_ _ _"),
+        "no wordmark away from a terminal: {status:?}"
+    );
+    assert!(
+        status.contains("af_heart ×"),
+        "the plain status line still reports: {status:?}"
+    );
+
+    let quiet = sandbox.run(&read_args(
+        "plain",
+        &fake,
+        &["--endpoint", &endpoint, "--sentences", "1", "--quiet"],
+    ));
+    assert!(
+        quiet.status.success(),
+        "--quiet must not change the exit code: {:?}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&quiet.stderr).contains('\x1b'),
+        "--quiet stays plain"
+    );
+}

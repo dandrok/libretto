@@ -21,6 +21,7 @@ use libretto::play::{self, Mpv, PlayError};
 use libretto::store::{self, BookRecord, Library, Progress, Store, StoreError};
 use libretto::text;
 use libretto::tts::{Kokoro, SpeechRequest, TtsError};
+use libretto::ui::{self, Ui};
 
 use crate::cli::{Cli, Command};
 
@@ -82,6 +83,7 @@ fn run() -> Result<(), AppError> {
                 player,
                 prefetch,
             },
+            cli.quiet,
         ),
         Some(Command::Doctor { endpoint, player }) => check(Overrides {
             endpoint,
@@ -89,7 +91,7 @@ fn run() -> Result<(), AppError> {
             ..Overrides::default()
         }),
         // Bare `libretto` resumes the last book: the common case, one word.
-        None => resume(&store),
+        None => resume(&store, cli.quiet),
     }
 }
 
@@ -109,7 +111,7 @@ fn check(overrides: Overrides) -> Result<(), AppError> {
 
 /// `libretto` with no arguments. Resumes the last book; on a fresh library it
 /// explains itself instead of failing, because that is not an error.
-fn resume(store: &Store) -> Result<(), AppError> {
+fn resume(store: &Store, quiet: bool) -> Result<(), AppError> {
     let library = store.load()?;
     if library.books.is_empty() {
         println!("no books\nadd one: libretto add <book.epub>");
@@ -133,6 +135,7 @@ fn resume(store: &Store) -> Result<(), AppError> {
             sentences: None,
         },
         Overrides::default(),
+        quiet,
     )
 }
 
@@ -222,11 +225,17 @@ struct ReadRequest {
     sentences: Option<usize>,
 }
 
-fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(), AppError> {
+fn read(
+    store: &Store,
+    request: ReadRequest,
+    overrides: Overrides,
+    quiet: bool,
+) -> Result<(), AppError> {
     let mut library = store.load()?;
     // Cloned: the progress closure below mutates the library while this is read.
     let record = pick_book(&library, request.id.as_deref())?.clone();
 
+    let ui = Ui::new(quiet);
     let settings = Settings::resolve(&config::load()?, overrides);
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
@@ -275,6 +284,7 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
         start + 1,
         sentences.len()
     );
+    ui.splash();
 
     let mut position = Progress {
         chapter_index,
@@ -283,10 +293,22 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
     };
     let mut save_failure: Option<StoreError> = None;
 
+    let speaking = ui::Speaking::new(&player, &ui);
+    let base = ui::Status {
+        title: short(&record.title, 28),
+        chapter: chapter_index,
+        chapters: book.chapters.len(),
+        sentence: start,
+        total: sentences.len(),
+        voice: settings.voice.clone(),
+        speed: settings.speed,
+    };
+    ui.open(base.clone());
+
     let played = play::play_sentences(
         &play::Session {
             engine: &engine,
-            player: &player,
+            player: &speaking,
             cache: &cache,
             template: &template,
         },
@@ -296,14 +318,9 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
         |next| {
             position.sentence_index = next;
             position.updated_at = store::now_seconds();
-            print_progress(
-                &record,
-                chapter_index,
-                book.chapters.len(),
-                next,
-                sentences.len(),
-                &settings,
-            );
+            let mut snapshot = base.clone();
+            snapshot.sentence = next;
+            ui.note(snapshot);
             library.progress.insert(record.id.clone(), position);
             library.last_read = Some(record.id.clone());
             if let Err(error) = store.save(&library) {
@@ -311,7 +328,7 @@ fn read(store: &Store, request: ReadRequest, overrides: Overrides) -> Result<(),
             }
         },
     );
-    eprintln!();
+    ui.finish();
     let played = played?;
     if let Some(error) = save_failure {
         return Err(AppError::Store(error));
@@ -375,26 +392,6 @@ fn pick_book<'a>(library: &'a Library, id: Option<&str>) -> Result<&'a BookRecor
             Ok(library.resolve(&last)?)
         }
     }
-}
-
-fn print_progress(
-    record: &BookRecord,
-    chapter_index: usize,
-    chapters: usize,
-    sentence: usize,
-    total: usize,
-    settings: &Settings,
-) {
-    eprint!(
-        "\r  {} · ch {}/{} · {}/{} · {} ×{:.2}   ",
-        short(&record.title, 28),
-        chapter_index + 1,
-        chapters,
-        sentence,
-        total,
-        settings.voice,
-        settings.speed
-    );
 }
 
 /// Book titles come from a file, and a terminal interprets control characters:
