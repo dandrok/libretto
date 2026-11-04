@@ -77,6 +77,15 @@ on the tagged tree.
   `tests/cli_read.rs::a_title_with_control_characters_cannot_drive_the_terminal`
 - AC-15: a source file changed since it was added is refused with exit 4 instead of spoken —
   `tests/cli_read.rs::a_changed_book_file_is_refused_instead_of_read`
+- AC-16: on a terminal, `read` draws the wordmark once, a sentence bar with a percentage, and
+  a slow breath (◡ ∘ ⊙ ◎ ⊙ ∘) that moves only while the player holds a sentence; the same run piped emits the
+  plain `\r` status line and no escape sequences —
+  `tests/cli_read.rs::a_piped_read_stays_plain_and_quiet_is_accepted`,
+  `src/ui.rs::tests::the_plain_line_matches_what_scripts_have_always_seen`
+- AC-17: `--quiet` suppresses the wordmark, the bar and the breath even on a terminal, and
+  changes no exit code —
+  `tests/cli_read.rs::a_piped_read_stays_plain_and_quiet_is_accepted`,
+  `src/ui.rs::tests::quiet_wins_over_a_terminal`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
