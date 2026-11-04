@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-04
+
+### Fixed
+
+- `libretto add` names the file it could not read, and for a relative path that does
+  not exist prints where it resolved. A missing path is bad input (exit 4), not a
+  broken library (exit 6) — the two used to be reported as the same failure.
+- `libretto read` steps over a fragment with nothing to pronounce — a bullet, a
+  horizontal rule — instead of stopping the book on it. A run of five silent replies
+  in a row still reports the endpoint as broken, so a dead server is not mistaken for
+  a quiet book.
+
 ## [1.1.0] - 2026-11-03
 
 ### Added
