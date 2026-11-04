@@ -13,6 +13,10 @@ use clap::{Parser, Subcommand};
     long_about = None,
 )]
 pub struct Cli {
+    /// No wordmark, no colours, no live line — for scripts, logs and CI
+    #[arg(long, global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

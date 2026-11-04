@@ -15,3 +15,4 @@ pub mod play;
 pub mod store;
 pub mod text;
 pub mod tts;
+pub mod ui;
