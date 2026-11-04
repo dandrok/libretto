@@ -37,10 +37,40 @@ it resumes the last book.
 
 ## Install
 
+One Rust binary, built once — there are no prebuilt downloads.
+
+**Rust 1.99 or newer.** `rustup` is the shortest path:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**Then build and install it:**
+
+```bash
+git clone https://github.com/dandrok/libretto
+cd libretto
+cargo install --path . --locked
+```
+
+`cargo install` puts it in `~/.cargo/bin`, which `rustup` already keeps on your
+`PATH`. To install somewhere else instead — `~/.local/bin`, a container image —
+copy the release build:
+
 ```bash
 cargo build --release
 install -m755 target/release/libretto ~/.local/bin/
 ```
+
+**Check the build before you rely on it.** `doctor` names whatever is missing —
+the player, the endpoint, the cache:
+
+```bash
+libretto --version    # libretto 1.1.1
+libretto doctor
+```
+
+Upgrading is the same steps: `git pull`, then `cargo install --path . --locked --force`.
 
 ## Use
 
