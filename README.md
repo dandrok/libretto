@@ -2,7 +2,8 @@
 
 [![crates.io version](https://img.shields.io/crates/v/libretto.svg)](https://crates.io/crates/libretto)
 
-Listen to EPUB books from the terminal, in a good voice, starting where you stopped.
+Listen to EPUB and PDF books from the terminal, in a good voice, starting where you
+stopped.
 
 It is for the books you keep meaning to read — the 25-hour technical ones — while you
 cook, walk or fold laundry. No subscription, no cloud, no account: the voice runs on
@@ -20,6 +21,10 @@ stopped at chapter 9, sentence 3/287 (3 played, 0 from cache)
 
 Run it again and it starts at sentence 4 of 287. Type `libretto` with no arguments and
 it resumes the last book.
+
+On a terminal that last line is a live one — a wordmark once, then a bar with a
+percentage and a slow breath while a sentence plays. The text above is what a pipe,
+`--quiet` or a log still gets.
 
 ## What you need
 
@@ -78,7 +83,7 @@ install -m755 target/release/libretto ~/.local/bin/
 the player, the endpoint, the cache:
 
 ```bash
-libretto --version    # libretto 1.1.1
+libretto --version    # libretto 1.2.0
 libretto doctor
 ```
 
@@ -92,6 +97,7 @@ libretto add path/to/book.epub      # or book.pdf
 libretto ls                         # what is in the library, with progress
 libretto read <id>                  # speak it from where you stopped
 libretto                             # same, for the last book you read
+libretto rm <id>                     # forget a book (the file itself is untouched)
 libretto doctor                      # why is it silent?
 ```
 
@@ -105,7 +111,23 @@ Flags that matter while listening:
 | `--skip N` / `--rewind N` | move forward, or replay a little, without losing your place |
 | `--sentences N` | play N sentences and stop — good for trying a voice |
 | `--voice`, `--speed` | `af_heart` (default), `af_bella`, `bf_emma`; speed 0.25–4.0 |
+| `--model`, `--prefetch` | the model name sent to the endpoint (`kokoro`); sentences synthesized ahead (5) |
 | `--endpoint`, `--player` | point at another TTS server or player |
+| `--quiet` | no wordmark, no colour, no live line — for scripts, logs and CI |
+
+## While it reads
+
+On a terminal `read` draws one line on stderr: a wordmark once, then a bar with a
+percentage, then a slow breath (`◡ ∘ ⊙ ◎ ⊙ ∘`) that moves while a sentence is
+playing. stdout stays the plain text, so a pipe, a log or a CI job gets no escape
+codes at all.
+
+The keyboard belongs to the player, not to libretto: space pauses and the arrow keys
+seek, because mpv is the one holding the terminal for the length of a sentence. Your
+saved position still moves one sentence at a time.
+
+`--quiet` turns the wordmark, the colour and the live line off. `NO_COLOR` drops the
+colour alone and keeps the bar.
 
 ## How it works
 
@@ -126,11 +148,12 @@ Flags that matter while listening:
 `~/.config/libretto/config.toml`, every key optional; flags win over the file:
 
 ```toml
+endpoint = "http://127.0.0.1:8880/v1"
+model = "kokoro"
 voice = "af_heart"
 speed = 1.25
-endpoint = "http://127.0.0.1:8880/v1"
-player = "mpv"
 prefetch = 5
+player = "mpv"
 ```
 
 ## Exit codes
@@ -162,8 +185,9 @@ it can follow:
 
 ## What it does not do
 
-MOBI/AZW, `.m4b` export, cross-device sync, a full-screen UI. The cache is disposable:
-delete `~/.cache/libretto` any time.
+MOBI/AZW, `.m4b` export, cross-device sync, a full-screen UI or a timeline to scrub —
+the live line is one row on stderr, not a screen. The cache is disposable: delete
+`~/.cache/libretto` any time.
 
 ## License
 
