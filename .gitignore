@@ -9,3 +9,9 @@
 .DS_Store
 # scanner output stays local
 .security-review/
+
+# the recording kit: kept locally so docs/demo.gif can be re-shot, never shipped
+/docs/demo.tape
+/docs/demo-book.txt
+/docs/demo-epub.py
+/docs/record-demo.sh
