@@ -9,6 +9,9 @@ It is for the books you keep meaning to read — the 25-hour technical ones — 
 cook, walk or fold laundry. No subscription, no cloud, no account: the voice runs on
 your own machine.
 
+![libretto reading a book — the wordmark, then a bar with a percentage and a slow
+breath while a sentence plays](https://raw.githubusercontent.com/dandrok/libretto/main/docs/demo.gif)
+
 ```
 $ libretto add "Grokking Algorithms.epub"
 added grokking-algorithms-second-e-ebcf — Grokking Algorithms, Second Edition (25 chapters)
