@@ -61,11 +61,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - run: cargo build --all-features
 
+  # Built from crates.io, not the Docker action: that image curls a GitHub release
+  # asset with no --fail and no retry, so a 5xx from the release CDN hands an HTML
+  # error page to `tar`, which exits 2 and turns the job red for nothing. crates.io
+  # has retries in cargo and no third CDN in the path; the cost is a few minutes of
+  # compilation. Pinned to the version that ran before, so the checks are the same.
   deny:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo deny --all-features check
 
   # rustsec/audit-check needs the Checks API, which a fork's token cannot use.
   # cargo-audit installs from a prebuilt binary and reports plainly instead.
