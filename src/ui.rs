@@ -530,6 +530,9 @@ pub fn bar_line_with(
     // The book's number, not this chapter's: the same figure `ls` prints, so a reader never
     // has to remember which of the two they are looking at.
     let percent = status.percent;
+    // No padding: a right-aligned `1%` in a three-column field leaves a hole the eye reads as a
+    // gap between the cells and the number.
+    let pct = format!("{percent}%");
     // The line has to fit: a wrapped row breaks the cursor arithmetic the whole block depends
     // on, so when the terminal is narrow the counters give way before the cells do — time left
     // first, then the sentence counters, then the voice, because those are the parts a reader
@@ -563,14 +566,14 @@ pub fn bar_line_with(
         (false, false, false),
     ] {
         let candidate = counters(time, sentences, voice);
-        let reserved = 2 + 1 + 4 + 2 + candidate.chars().count() + 3;
+        let reserved = 2 + 1 + pct.len() + 2 + candidate.chars().count() + 3;
         let budget = width.saturating_sub(reserved);
         let shape = if cells_worth_it && budget >= MIN_CELLS {
             sparkline(status, budget)
         } else {
             String::new()
         };
-        let total = 2 + shape.chars().count() + 1 + 4 + 2 + candidate.chars().count() + 3;
+        let total = 2 + shape.chars().count() + 1 + pct.len() + 2 + candidate.chars().count() + 3;
         if total > width {
             continue;
         }
@@ -598,19 +601,15 @@ pub fn bar_line_with(
     // A terminal narrower than the counters themselves cannot be satisfied by dropping parts;
     // the line is then cut rather than allowed to wrap.
     if !colour {
-        return cut(
-            format!("{CLEAR}  {track} {percent:>3}%  {chosen}{tail}"),
-            width,
-        );
+        return cut(format!("{CLEAR}  {track} {pct}  {chosen}{tail}"), width);
     }
-    let coloured =
-        format!("{CLEAR}  {ACCENT}{track}{RESET} {percent:>3}%  {DIM}{chosen}{RESET}{tail}");
+    let coloured = format!("{CLEAR}  {ACCENT}{track}{RESET} {pct}  {DIM}{chosen}{RESET}{tail}");
     if visible_columns(&coloured) <= width {
         return coloured;
     }
     // The styling costs no columns but the escapes count as characters if the line is cut, so a
     // narrow terminal gets the readable plain line instead of a broken coloured one.
-    cut(format!("{CLEAR}  {track} {percent:>3}%  {chosen}"), width)
+    cut(format!("{CLEAR}  {track} {pct}  {chosen}"), width)
 }
 
 fn sweep(filled: usize, colour: bool) -> String {
