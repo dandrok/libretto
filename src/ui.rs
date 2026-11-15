@@ -8,7 +8,7 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -24,7 +24,10 @@ const DIM: &str = "\x1b[2m";
 const ACCENT: &str = "\x1b[38;5;179m";
 const CLEAR: &str = "\r\x1b[2K";
 
-const TICK: Duration = Duration::from_millis(90);
+/// How often the frame is considered. Drawing more often than the content changes is wasted
+/// bytes; drawing less often than the words change is what a reader sees as lag, so the tick
+/// is short and identical frames are dropped.
+const TICK: Duration = Duration::from_millis(30);
 const SWEEP_STEP: Duration = Duration::from_millis(16);
 const SWEEP_RELEASE: Duration = Duration::from_millis(120);
 const SWEEP_CELLS: usize = 28;
@@ -73,6 +76,8 @@ pub struct Ui {
     width: usize,
     /// The player's own position, once it has one. A wall clock is the fallback.
     clock_source: Arc<Mutex<Option<Clock>>>,
+    /// Milliseconds to shift the underline by; positive makes it lag the voice.
+    sync_offset: AtomicI64,
     /// Where the previous frame stood. Shared across pulses: a block is taller than one
     /// line, and the next sentence's pulse must know how far up to go.
     paint: Arc<Paint>,
@@ -107,6 +112,7 @@ impl Ui {
             follow: Arc::new(Mutex::new(None)),
             width: columns - 2,
             clock_source: Arc::new(Mutex::new(None)),
+            sync_offset: AtomicI64::new(0),
             paint: Arc::new(Paint::default()),
             clock: Arc::new(AtomicUsize::new(0)),
         }
@@ -114,6 +120,13 @@ impl Ui {
 
     pub fn width(&self) -> usize {
         self.width
+    }
+
+    /// Shift the underline in time. Everything left is smaller than a word — the engine's
+    /// own accuracy and the audio buffer — and neither is ours to measure, so the reader
+    /// gets the dial a subtitle player has.
+    pub fn set_sync_offset(&self, milliseconds: i64) {
+        self.sync_offset.store(milliseconds, Ordering::Relaxed);
     }
 
     /// Teach the view to ask the player where it is. Without this the underline follows a
@@ -226,6 +239,7 @@ impl Ui {
         let width = self.width;
         let paint = Arc::clone(&self.paint);
         let clock_source = Arc::clone(&self.clock_source);
+        let offset_ms = self.sync_offset.load(Ordering::Relaxed);
 
         let handle = thread::spawn(move || {
             let mut err = io::stderr();
@@ -233,6 +247,7 @@ impl Ui {
             // the voice by however long the player takes to make sound — a fraction of a
             // word, and the same on every sentence.
             let started = Instant::now();
+            let mut last: Vec<String> = Vec::new();
             while !flag.load(Ordering::Relaxed) {
                 let snapshot = match state.lock() {
                     Ok(state) => state.clone(),
@@ -241,10 +256,15 @@ impl Ui {
                 let tick = clock.fetch_add(1, Ordering::Relaxed);
                 let sentence = follow.lock().ok().and_then(|slot| slot.clone());
                 let source = clock_source.lock().ok().and_then(|slot| slot.clone());
-                let moment = moment(source.as_ref(), started);
+                let moment = moment(source.as_ref(), started, offset_ms);
                 let frame = frame(&snapshot, tick, colour, sentence.as_ref(), moment, width);
-                if paint.draw(&mut err, &frame).is_err() {
-                    break;
+                // The clock is sampled every tick, but the terminal is only written when the
+                // picture differs: a held word and a still breath cost nothing.
+                if frame != last {
+                    if paint.draw(&mut err, &frame).is_err() {
+                        break;
+                    }
+                    last = frame;
                 }
                 thread::sleep(TICK);
             }
@@ -279,14 +299,15 @@ struct Moment {
 /// The player's own position when it reports one, and the wall clock when it cannot. A
 /// paused player stops reporting progress, so the underline stops with it — which is the
 /// whole reason to ask — and it also says so, so the line can stop breathing.
-fn moment(clock: Option<&Clock>, started: Instant) -> Moment {
+fn moment(clock: Option<&Clock>, started: Instant, offset_ms: i64) -> Moment {
+    let shift = offset_ms as f32 / 1000.0;
     match clock.and_then(|clock| clock()) {
         Some(position) => Moment {
-            at: position.seconds.max(0.0) as f32,
+            at: (position.seconds as f32 - shift).max(0.0),
             paused: position.paused,
         },
         None => Moment {
-            at: started.elapsed().as_secs_f32(),
+            at: (started.elapsed().as_secs_f32() - shift).max(0.0),
             paused: false,
         },
     }
@@ -670,21 +691,52 @@ mod tests {
         });
         let started = Instant::now();
         std::thread::sleep(Duration::from_millis(20));
-        let held = moment(Some(&frozen), started);
+        let held = moment(Some(&frozen), started, 0);
         assert_eq!(held.at, 2.5, "a paused player's position does not advance");
         assert!(held.paused, "and it says why");
         assert!(
-            moment(None, started).at > 0.0,
+            moment(None, started, 0).at > 0.0,
             "without a player the wall clock answers"
         );
         assert!(
-            !moment(None, started).paused,
+            !moment(None, started, 0).paused,
             "a wall clock is never paused: it cannot know"
         );
         let silent: Clock = Arc::new(|| None);
         assert!(
-            moment(Some(&silent), started).at > 0.0,
+            moment(Some(&silent), started, 0).at > 0.0,
             "a player that has not answered yet falls back rather than freezing at zero"
+        );
+    }
+
+    #[test]
+    fn the_sync_dial_shifts_both_clocks() {
+        let clock: Clock = Arc::new(|| {
+            Some(Position {
+                seconds: 2.0,
+                paused: false,
+            })
+        });
+        let started = Instant::now();
+        assert_eq!(moment(Some(&clock), started, 0).at, 2.0);
+        assert_eq!(
+            moment(Some(&clock), started, 250).at,
+            1.75,
+            "positive lags the voice"
+        );
+        assert_eq!(
+            moment(Some(&clock), started, -250).at,
+            2.25,
+            "negative leads it"
+        );
+        assert_eq!(
+            moment(Some(&clock), started, 9_000).at,
+            0.0,
+            "and never winds past the start of the sentence"
+        );
+        assert!(
+            moment(None, started, -5_000).at > 0.0,
+            "the fallback shifts too"
         );
     }
 

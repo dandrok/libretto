@@ -66,11 +66,27 @@ fn run() -> Result<(), AppError> {
         Some(Command::Rm { id }) => remove(&store, &id),
         Some(Command::Read(args)) => {
             let (request, overrides) = split(args);
-            read(&store, request, overrides, cli.quiet, false, cli.width)
+            read(
+                &store,
+                request,
+                overrides,
+                cli.quiet,
+                false,
+                cli.width,
+                cli.sync_offset.unwrap_or(0),
+            )
         }
         Some(Command::Follow(args)) => {
             let (request, overrides) = split(args);
-            read(&store, request, overrides, cli.quiet, true, cli.width)
+            read(
+                &store,
+                request,
+                overrides,
+                cli.quiet,
+                true,
+                cli.width,
+                cli.sync_offset.unwrap_or(0),
+            )
         }
         Some(Command::Doctor { endpoint, player }) => check(Overrides {
             endpoint,
@@ -125,6 +141,7 @@ fn resume(store: &Store, quiet: bool) -> Result<(), AppError> {
         quiet,
         false,
         None,
+        0,
     )
 }
 
@@ -294,12 +311,14 @@ fn read(
     quiet: bool,
     following: bool,
     width: Option<usize>,
+    sync_offset: i64,
 ) -> Result<(), AppError> {
     let mut library = store.load()?;
     // Cloned: the progress closure below mutates the library while this is read.
     let mut record = pick_book(&library, request.id.as_deref())?.clone();
 
     let ui = Ui::with_width(quiet, if following { width } else { None });
+    ui.set_sync_offset(sync_offset);
     let settings = Settings::resolve(&config::load()?, overrides);
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
