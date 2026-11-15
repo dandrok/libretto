@@ -65,28 +65,12 @@ fn run() -> Result<(), AppError> {
         }
         Some(Command::Rm { id }) => remove(&store, &id),
         Some(Command::Read(args)) => {
-            let (request, overrides) = split(args);
-            read(
-                &store,
-                request,
-                overrides,
-                cli.quiet,
-                false,
-                cli.width,
-                cli.sync_offset.unwrap_or(0),
-            )
+            let (request, overrides) = split(args, cli.sync_offset);
+            read(&store, request, overrides, cli.quiet, false, cli.width)
         }
         Some(Command::Follow(args)) => {
-            let (request, overrides) = split(args);
-            read(
-                &store,
-                request,
-                overrides,
-                cli.quiet,
-                true,
-                cli.width,
-                cli.sync_offset.unwrap_or(0),
-            )
+            let (request, overrides) = split(args, cli.sync_offset);
+            read(&store, request, overrides, cli.quiet, true, cli.width)
         }
         Some(Command::Doctor { endpoint, player }) => check(Overrides {
             endpoint,
@@ -141,7 +125,6 @@ fn resume(store: &Store, quiet: bool) -> Result<(), AppError> {
         quiet,
         false,
         None,
-        0,
     )
 }
 
@@ -276,7 +259,7 @@ fn remove(store: &Store, id: &str) -> Result<(), AppError> {
 
 /// One argument block, two verbs: `read` and `follow` share everything except how the
 /// sentence reaches the screen.
-fn split(args: BookArgs) -> (ReadRequest, Overrides) {
+fn split(args: BookArgs, sync_offset: Option<i64>) -> (ReadRequest, Overrides) {
     (
         ReadRequest {
             id: args.id,
@@ -292,6 +275,7 @@ fn split(args: BookArgs) -> (ReadRequest, Overrides) {
             model: args.model,
             player: args.player,
             prefetch: args.prefetch,
+            sync_offset,
         },
     )
 }
@@ -311,15 +295,14 @@ fn read(
     quiet: bool,
     following: bool,
     width: Option<usize>,
-    sync_offset: i64,
 ) -> Result<(), AppError> {
     let mut library = store.load()?;
     // Cloned: the progress closure below mutates the library while this is read.
     let mut record = pick_book(&library, request.id.as_deref())?.clone();
 
     let ui = Ui::with_width(quiet, if following { width } else { None });
-    ui.set_sync_offset(sync_offset);
     let settings = Settings::resolve(&config::load()?, overrides);
+    ui.set_sync_offset(settings.sync_offset);
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
     let player = Mpv::new(settings.player.clone());

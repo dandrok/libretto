@@ -165,6 +165,13 @@ never asks for timings at all, which is why it is still one request per sentence
 `--width N` (else `$COLUMNS`, else 80) decides where the text wraps. Piped, or with
 `--quiet`, `follow` is byte-for-byte `read`.
 
+`--sync-offset MS` shifts the underline in time: positive makes it lag the voice, negative
+makes it lead. It exists because the last part of the error is the audio stack's, not the
+engine's — the player reports where the decoder is, and the sound arrives a little later. If
+the underline runs ahead of the voice on your machine, try `-80`; if it trails, `80`. It is a
+property of the machine, so put the number that fits in `sync_offset` in the config file and
+stop thinking about it.
+
 ## How it works
 
 1. The EPUB is unpacked and its chapters come out in spine order. Running heads (the
@@ -190,6 +197,7 @@ voice = "af_heart"
 speed = 1.25
 prefetch = 5
 player = "mpv"
+sync_offset = -80          # read-along only; see "Following along"
 ```
 
 ## Exit codes
