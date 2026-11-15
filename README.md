@@ -123,8 +123,10 @@ Flags that matter while listening:
 
 On a terminal `read` draws one line on stderr: a wordmark once, then a bar with a
 percentage, then a slow breath (`◡ ∘ ⊙ ◎ ⊙ ∘`) that moves while a sentence is
-playing. stdout stays the plain text, so a pipe, a log or a CI job gets no escape
-codes at all.
+playing. The bar is bracketed and twenty cells wide, filled to the book's own
+percentage, so `3%` and `60%` are the same distance apart on the screen as they
+are in the book. stdout stays the plain text, so a pipe, a log or a CI job gets no
+escape codes at all.
 
 The keyboard belongs to the player, not to libretto: space pauses and the arrow keys
 seek, because mpv is the one holding the terminal for the length of a sentence. Your
