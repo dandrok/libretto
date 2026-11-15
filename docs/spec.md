@@ -115,8 +115,10 @@ on the tagged tree.
   `src/ui.rs::tests::the_width_flag_wins_over_the_terminal_and_stays_sane`
 - AC-21: with mpv as the player, `follow` draws the underline against mpv's own playback
   position over its IPC socket, so the underline stands still while playback is paused and
-  moves again when it resumes; a player that reports no position falls back to a wall clock,
-  and the socket lives in a private directory that is removed when the sentence ends —
+  moves again when it resumes, and the line shows a pause mark instead of the breath for as
+  long as it is held; a player that reports no position falls back to a wall clock and its
+  line cannot show a pause, and the socket lives in a private directory that is removed when
+  the sentence ends —
   `src/play.rs::tests::the_position_is_read_from_the_socket_including_a_pause`,
   `src/play.rs::tests::the_player_is_told_where_the_socket_is`,
   `src/play.rs::tests::no_socket_and_no_position_are_the_same_answer`,

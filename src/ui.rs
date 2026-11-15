@@ -33,6 +33,8 @@ const BREATH: [char; 6] = ['◡', '∘', '⊙', '◎', '⊙', '∘'];
 /// Ticks per breath frame (3 × 90ms ≈ 270ms), so one breath lasts about 1.6s.
 const BREATH_TICKS: usize = 3;
 const BAR_CELLS: usize = 20;
+/// What the breath becomes when the player is paused: a held sentence, not a silent one.
+const PAUSE_MARK: &str = "❚❚";
 
 const WORDMARK: &str = "\
  _ _ _            _   _
@@ -239,8 +241,8 @@ impl Ui {
                 let tick = clock.fetch_add(1, Ordering::Relaxed);
                 let sentence = follow.lock().ok().and_then(|slot| slot.clone());
                 let source = clock_source.lock().ok().and_then(|slot| slot.clone());
-                let at = position(source.as_ref(), started);
-                let frame = frame(&snapshot, tick, colour, sentence.as_ref(), at, width);
+                let moment = moment(source.as_ref(), started);
+                let frame = frame(&snapshot, tick, colour, sentence.as_ref(), moment, width);
                 if paint.draw(&mut err, &frame).is_err() {
                     break;
                 }
@@ -267,13 +269,26 @@ impl Ui {
     }
 }
 
-/// Where the underline goes: the player's own position when it reports one, and the wall
-/// clock when it cannot. A paused player stops reporting progress, so the underline stops
-/// with it — which is the whole reason to ask.
-fn position(clock: Option<&Clock>, started: Instant) -> f32 {
+/// One frame's worth of clock: where the underline goes, and whether the audio is held.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Moment {
+    at: f32,
+    paused: bool,
+}
+
+/// The player's own position when it reports one, and the wall clock when it cannot. A
+/// paused player stops reporting progress, so the underline stops with it — which is the
+/// whole reason to ask — and it also says so, so the line can stop breathing.
+fn moment(clock: Option<&Clock>, started: Instant) -> Moment {
     match clock.and_then(|clock| clock()) {
-        Some(position) => position.seconds.max(0.0) as f32,
-        None => started.elapsed().as_secs_f32(),
+        Some(position) => Moment {
+            at: position.seconds.max(0.0) as f32,
+            paused: position.paused,
+        },
+        None => Moment {
+            at: started.elapsed().as_secs_f32(),
+            paused: false,
+        },
     }
 }
 
@@ -283,16 +298,16 @@ fn frame(
     tick: usize,
     colour: bool,
     sentence: Option<&follow::Sentence>,
-    at: f32,
+    moment: Moment,
     width: usize,
 ) -> Vec<String> {
     let mut frame: Vec<String> = Vec::new();
     if let Some(sentence) = sentence {
-        let active = captions::index_at(&sentence.words, at);
+        let active = captions::index_at(&sentence.words, moment.at);
         let rows = follow::layout(sentence, width, active);
         frame.extend(follow::render(&rows, colour));
     }
-    frame.push(bar_line(status, Some(tick), colour));
+    frame.push(bar_line_with(status, Some(tick), moment.paused, colour));
     frame
 }
 
@@ -385,6 +400,13 @@ pub fn plain_line(status: &Status) -> String {
 /// happening", which is exactly what the player call proves. A waveform here
 /// would claim to follow the voice, and nothing in this program knows that.
 pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
+    bar_line_with(status, tick, false, colour)
+}
+
+/// [bar_line] with the player's own state: a breath while a sentence is being spoken, and
+/// a pause mark while it is held. Nothing here animates on a pause, because nothing is
+/// happening — that is the point of the mark.
+pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour: bool) -> String {
     let percent = status
         .sentence
         .checked_mul(100)
@@ -402,6 +424,8 @@ pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
     );
     let tail = match tick {
         None => "   ".to_string(),
+        Some(_) if paused && colour => format!("  {ACCENT}{PAUSE_MARK}{RESET}"),
+        Some(_) if paused => format!("  {PAUSE_MARK}"),
         Some(tick) if colour => format!("  {ACCENT}{}{RESET}", breath(tick)),
         Some(tick) => format!("  {}", breath(tick)),
     };
@@ -534,7 +558,17 @@ mod tests {
     #[test]
     fn a_frame_with_a_sentence_draws_the_block_and_then_the_bar() {
         let status = status(3, 40);
-        let with = frame(&status, 0, false, Some(&following_sentence()), 1.0, 40);
+        let with = frame(
+            &status,
+            0,
+            false,
+            Some(&following_sentence()),
+            Moment {
+                at: 1.0,
+                paused: false,
+            },
+            40,
+        );
         assert!(with.len() > 2, "block plus bar: {with:?}");
         assert!(
             with.iter().any(|row| row.contains("quick brown fox")),
@@ -545,15 +579,45 @@ mod tests {
             "the bar is last"
         );
 
-        let without = frame(&status, 0, false, None, 0.0, 40);
+        let without = frame(
+            &status,
+            0,
+            false,
+            None,
+            Moment {
+                at: 0.0,
+                paused: false,
+            },
+            40,
+        );
         assert_eq!(without.len(), 1, "read draws one line and nothing else");
     }
 
     #[test]
     fn the_highlight_advances_with_the_clock() {
         let sentence = following_sentence();
-        let start = frame(&status(3, 40), 0, true, Some(&sentence), 0.0, 40);
-        let later = frame(&status(3, 40), 0, true, Some(&sentence), 3.0, 40);
+        let start = frame(
+            &status(3, 40),
+            0,
+            true,
+            Some(&sentence),
+            Moment {
+                at: 0.0,
+                paused: false,
+            },
+            40,
+        );
+        let later = frame(
+            &status(3, 40),
+            0,
+            true,
+            Some(&sentence),
+            Moment {
+                at: 3.0,
+                paused: false,
+            },
+            40,
+        );
         assert!(
             start.join("\n").contains(&format!("{ACCENT}{}", "\x1b[4m")),
             "something is lit at zero"
@@ -606,19 +670,63 @@ mod tests {
         });
         let started = Instant::now();
         std::thread::sleep(Duration::from_millis(20));
-        assert_eq!(
-            position(Some(&frozen), started),
-            2.5,
-            "a paused player's position does not advance"
+        let held = moment(Some(&frozen), started);
+        assert_eq!(held.at, 2.5, "a paused player's position does not advance");
+        assert!(held.paused, "and it says why");
+        assert!(
+            moment(None, started).at > 0.0,
+            "without a player the wall clock answers"
         );
         assert!(
-            position(None, started) > 0.0,
-            "without a player the wall clock answers"
+            !moment(None, started).paused,
+            "a wall clock is never paused: it cannot know"
         );
         let silent: Clock = Arc::new(|| None);
         assert!(
-            position(Some(&silent), started) > 0.0,
+            moment(Some(&silent), started).at > 0.0,
             "a player that has not answered yet falls back rather than freezing at zero"
+        );
+    }
+
+    #[test]
+    fn a_paused_player_stops_breathing_and_shows_a_mark() {
+        let status = status(3, 40);
+        let sentence = following_sentence();
+        let playing = frame(
+            &status,
+            5,
+            false,
+            Some(&sentence),
+            Moment {
+                at: 0.5,
+                paused: false,
+            },
+            40,
+        );
+        let held = frame(
+            &status,
+            5,
+            false,
+            Some(&sentence),
+            Moment {
+                at: 0.5,
+                paused: true,
+            },
+            40,
+        );
+
+        let bar_playing = playing.last().expect("bar");
+        let bar_held = held.last().expect("bar");
+        assert!(!bar_playing.contains(PAUSE_MARK), "{bar_playing:?}");
+        assert!(bar_held.contains(PAUSE_MARK), "{bar_held:?}");
+        assert!(
+            !bar_held.chars().any(|glyph| BREATH.contains(&glyph)),
+            "nothing breathes while the book is held: {bar_held:?}"
+        );
+        let coloured = bar_line_with(&status, Some(5), true, true);
+        assert!(
+            coloured.contains(PAUSE_MARK),
+            "and the colour path agrees: {coloured:?}"
         );
     }
 

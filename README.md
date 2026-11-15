@@ -145,9 +145,11 @@ $ libretto follow grok --chapter 9
 ```
 
 Space still pauses mpv, and the underline stops with it: `follow` asks mpv where playback
-is over a private socket instead of counting seconds, so a paused book holds its word. A
-player that cannot answer (`--player ffplay`) falls back to a clock started at launch —
-that one keeps moving while paused, which is the price of the fallback.
+is over a private socket instead of counting seconds, so a paused book holds its word and
+the bar stops breathing — the breathing circle is replaced by `❚❚` for as long as the audio
+is held. A player that cannot answer (`--player ffplay`) falls back to a clock started at
+launch: it keeps moving while paused, and the line cannot show that it is held, which is the
+price of the fallback.
 
 Word timings come from the engine when it has them: Kokoro's captioned-speech endpoint
 returns word-level offsets generated during synthesis, and they are cached beside the audio
