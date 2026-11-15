@@ -123,6 +123,17 @@ on the tagged tree.
   `src/play.rs::tests::the_player_is_told_where_the_socket_is`,
   `src/play.rs::tests::no_socket_and_no_position_are_the_same_answer`,
   `src/ui.rs::tests::the_player_position_beats_the_wall_clock`
+- AC-22: `follow` asks a Kokoro-shaped endpoint for captioned speech — the `/dev` sibling of
+  a `/v1` endpoint — and draws the underline from the engine's own per-word timings, with a
+  punctuation-only token folded into the word before it so the list covers the printed
+  sentence; those timings are cached beside the audio, and a warm sentence costs no request.
+  An endpoint without the path, or a list that does not cover the sentence, interpolates by
+  length instead and is not asked again in that run. `read` never asks —
+  `tests/cache.rs::timings_are_stored_beside_the_audio_and_cost_nothing_to_replay`,
+  `tests/cache.rs::a_cached_sentence_without_timings_is_not_re_synthesized_to_get_them`,
+  `src/play.rs::tests::the_words_of_a_sentence_reach_the_caller_before_it_plays`,
+  `src/tts.rs::tests::a_versioned_endpoint_has_a_captioned_sibling`,
+  `src/captions.rs::tests::punctuation_of_its_own_belongs_to_the_word_before_it`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,

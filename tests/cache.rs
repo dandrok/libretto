@@ -161,3 +161,56 @@ fn deleting_the_cache_only_costs_a_resynthesis() {
 
     assert_eq!(fake.hits(), 2, "the cache is disposable, not authoritative");
 }
+
+#[test]
+fn timings_are_stored_beside_the_audio_and_cost_nothing_to_replay() {
+    let fake = FakeTts::start(Reply::Captioned {
+        audio: AUDIO.to_vec(),
+        words: vec![
+            ("Hello".to_string(), 0.0, 0.4),
+            ("world".to_string(), 0.4, 0.9),
+        ],
+    });
+    let engine = Kokoro::new(fake.endpoint()).expect("engine");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::at(dir.path());
+    let request = SpeechRequest::new("Hello world");
+
+    let (path, words) = cache
+        .audio_with_timings(&engine, &request)
+        .expect("first pass");
+    assert_eq!(std::fs::read(&path).expect("audio on disk"), AUDIO);
+    let words = words.expect("the engine had timings");
+    assert_eq!(words.len(), 2);
+    assert_eq!(words[1].text, "world");
+    assert_eq!(fake.hits(), 1, "the timings ride along with the audio");
+
+    let (again, words) = cache
+        .audio_with_timings(&engine, &request)
+        .expect("second pass");
+    assert_eq!(again, path);
+    assert_eq!(
+        words.expect("timings from the sidecar").len(),
+        2,
+        "a warm cache still knows the words"
+    );
+    assert_eq!(fake.hits(), 1, "and it cost no request at all");
+}
+
+#[test]
+fn a_cached_sentence_without_timings_is_not_re_synthesized_to_get_them() {
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let engine = Kokoro::new(fake.endpoint()).expect("engine");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = Cache::at(dir.path());
+    let request = SpeechRequest::new("A sentence from an engine without timings.");
+
+    cache.audio_for(&engine, &request).expect("first pass");
+    assert_eq!(fake.hits(), 1);
+
+    let (_, words) = cache
+        .audio_with_timings(&engine, &request)
+        .expect("second pass");
+    assert_eq!(words, None, "no sidecar means interpolate");
+    assert_eq!(fake.hits(), 1, "never a second request for a warm file");
+}

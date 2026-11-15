@@ -16,6 +16,7 @@
 
 #![allow(dead_code)]
 
+use base64::Engine as _;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -36,6 +37,12 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub enum Reply {
     /// 200 with these bytes as `audio/mpeg`.
     Audio(Vec<u8>),
+    /// 200 with a captioned-speech reply on `/dev/captioned_speech` — base64 audio plus
+    /// word timings — and the plain audio on any other path.
+    Captioned {
+        audio: Vec<u8>,
+        words: Vec<(String, f32, f32)>,
+    },
     /// 200 with an empty body: a server that "succeeds" without audio.
     Empty,
     /// An error status, to exercise the caller's handling.
@@ -148,12 +155,12 @@ fn serve(
         }
 
         match take_request(&mut buffer) {
-            Ok(Some(body)) => {
+            Ok(Some((line, body))) => {
                 hits.fetch_add(1, Ordering::SeqCst);
                 if let Ok(mut guard) = last_body.lock() {
                     *guard = body;
                 }
-                if write_response(&mut stream, reply).is_err() {
+                if write_response(&mut stream, reply, &line).is_err() {
                     return Ok(());
                 }
                 idle_since = Instant::now();
@@ -162,7 +169,7 @@ fn serve(
             Ok(None) => {}
             Err(()) => {
                 // Oversized body: answer and hang up rather than buffer it.
-                let _ = write_response(&mut stream, &Reply::Status(413));
+                let _ = write_response(&mut stream, &Reply::Status(413), "");
                 return Ok(());
             }
         }
@@ -187,7 +194,7 @@ fn serve(
 /// Pull one complete request out of the buffer, leaving the next one in place.
 ///
 /// `Ok(None)` means "need more bytes"; `Err(())` means the request is refuseable.
-fn take_request(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, ()> {
+fn take_request(buffer: &mut Vec<u8>) -> Result<Option<(String, Vec<u8>)>, ()> {
     let Some(head_end) = find(buffer, b"\r\n\r\n") else {
         return Ok(None);
     };
@@ -206,21 +213,47 @@ fn take_request(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>, ()> {
         return Ok(None);
     }
     let body = buffer[body_start..body_start + content_length].to_vec();
+    let line = String::from_utf8_lossy(&buffer[..head_end])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
     buffer.drain(..body_start + content_length);
-    Ok(Some(body))
+    Ok(Some((line, body)))
 }
 
 /// A client that hits its own read limit closes the socket mid-body, so a write
 /// error here is the expected outcome and must not fail the fake: the test is
 /// about the client's ceiling, not about how the server dies.
-fn write_response(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
-    let (status, body): (String, &[u8]) = match reply {
-        Reply::Audio(bytes) => ("200 OK".to_string(), bytes),
-        Reply::Empty => ("200 OK".to_string(), b""),
-        Reply::Status(code) => (format!("{code} Fake"), b"nope"),
+fn write_response(
+    stream: &mut TcpStream,
+    reply: &Reply,
+    request_line: &str,
+) -> std::io::Result<()> {
+    let captioned = request_line.contains("/dev/captioned_speech");
+    let (status, content_type, body): (String, &str, Vec<u8>) = match reply {
+        Reply::Audio(bytes) => ("200 OK".to_string(), "audio/mpeg", bytes.clone()),
+        Reply::Empty => ("200 OK".to_string(), "audio/mpeg", Vec::new()),
+        Reply::Status(code) => (format!("{code} Fake"), "text/plain", b"nope".to_vec()),
+        Reply::Captioned { audio, words } if captioned => {
+            let timestamps: Vec<serde_json::Value> = words
+                .iter()
+                .map(|(word, start, end)| {
+                    serde_json::json!({"word": word, "start_time": start, "end_time": end})
+                })
+                .collect();
+            let body = serde_json::json!({
+                "audio": base64::engine::general_purpose::STANDARD.encode(audio),
+                "audio_format": "audio/mpeg",
+                "timestamps": timestamps,
+            })
+            .to_string();
+            ("200 OK".to_string(), "application/json", body.into_bytes())
+        }
+        Reply::Captioned { audio, .. } => ("200 OK".to_string(), "audio/mpeg", audio.clone()),
     };
     let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
     stream.write_all(head.as_bytes())?;

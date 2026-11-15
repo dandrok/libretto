@@ -375,7 +375,7 @@ fn read(
     // What the read-along draws for one sentence: its neighbours for context, and its
     // words spread over the sentence's estimated length. The engine's own word timings
     // replace the estimate when it has them.
-    let follow_sentence = |index: usize| -> follow::Sentence {
+    let follow_sentence = |index: usize, spoken: Option<&[captions::Word]>| -> follow::Sentence {
         // The view prints book text, which is not ours: control characters are flattened
         // before anything reaches the terminal, and the word list is built from the
         // flattened text so the highlight still addresses the words on screen.
@@ -385,15 +385,24 @@ fn read(
             sentences.get(at).map(|sentence| text::visible(sentence))
         };
         let duration = estimate::duration(current.chars().count(), settings.speed);
+        // The engine's own timings are used only when they cover the sentence word for
+        // word: it normalises text before speaking, and a list that slipped by one word
+        // would light the wrong word for the rest of the sentence.
+        let words = spoken
+            .filter(|words| captions::aligns(words, &current))
+            .map(|words| words.to_vec())
+            .unwrap_or_else(|| captions::interpolate(&current, duration));
         follow::Sentence {
             previous: neighbour(-1),
-            words: captions::interpolate(&current, duration),
+            words,
             current,
             next: neighbour(1),
         }
     };
     if following {
-        ui.set_follow(Some(follow_sentence(start)));
+        // Painted before the first sentence is synthesized, so the text appears as soon as
+        // the book opens; the engine's timings replace the estimate when it starts.
+        ui.set_follow(Some(follow_sentence(start, None)));
     }
 
     println!(
@@ -432,19 +441,22 @@ fn read(
             player: &speaking,
             cache: &cache,
             template: &template,
+            captions: following,
         },
         &sentences,
         start,
         request.sentences,
+        |index, words| {
+            if following {
+                ui.set_follow(Some(follow_sentence(index, words)));
+            }
+        },
         |next| {
             position.sentence_index = next;
             position.updated_at = store::now_seconds();
             let mut snapshot = base.clone();
             snapshot.sentence = next;
             ui.note(snapshot);
-            if following {
-                ui.set_follow(Some(follow_sentence(next)));
-            }
             library.progress.insert(record.id.clone(), position);
             library.last_read = Some(record.id.clone());
             if let Err(error) = store.save(&library) {
