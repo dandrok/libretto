@@ -35,6 +35,9 @@ const SWEEP_CELLS: usize = 28;
 const BREATH: [char; 6] = ['◡', '∘', '⊙', '◎', '⊙', '∘'];
 /// Ticks per breath frame (3 × 90ms ≈ 270ms), so one breath lasts about 1.6s.
 const BREATH_TICKS: usize = 3;
+/// A line that cannot hold at least this many cells drops a counter instead.
+const MIN_CELLS: usize = 6;
+
 /// One cell per chapter, or fewer for a book with more chapters than the line can hold.
 const SPARK_CELLS: usize = 40;
 /// Partial cells, so a chapter the reader is inside reads as progress rather than as empty.
@@ -338,7 +341,13 @@ fn frame(
         let rows = follow::layout(sentence, width, active, follow::SENTENCE_ROWS);
         frame.extend(follow::render(&rows, colour));
     }
-    frame.push(bar_line_with(status, Some(tick), moment.paused, colour));
+    frame.push(bar_line_with(
+        status,
+        Some(tick),
+        moment.paused,
+        colour,
+        width,
+    ));
     frame
 }
 
@@ -409,15 +418,42 @@ impl Player for Speaking<'_> {
     }
 }
 
+/// Columns a line occupies, escape sequences taking none.
+fn visible(line: &str) -> usize {
+    let mut columns = 0;
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character == '\x1b' {
+            // Skip to the final byte of the sequence: letters end CSI, `m` included.
+            for next in characters.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        columns += 1;
+    }
+    columns
+}
+
+/// Cut a plain line to the width, never mid-escape.
+fn cut(line: String, width: usize) -> String {
+    if visible(&line) <= width {
+        return line;
+    }
+    line.chars().take(width).collect()
+}
+
 /// A cell per chapter: filled for the chapters behind the reader, a partial cell for the one
 /// they are inside, faint for the rest. A plain bar says "12% of the way through"; this says
 /// "chapter 4 of 27, a third into it", which is the shape of the book the numbers describe.
 ///
 /// A book with more chapters than the line has cells has them grouped — the boundary cell is
 /// then the group holding the reader, still partial for how far into the group they are.
-pub fn sparkline(status: &Status) -> String {
+pub fn sparkline(status: &Status, room: usize) -> String {
     let chapters = status.chapters.max(1);
-    let cells = chapters.min(SPARK_CELLS);
+    let cells = chapters.min(SPARK_CELLS).min(room);
     let filled = if status.total == 0 {
         0.0
     } else {
@@ -478,38 +514,66 @@ pub fn plain_line(status: &Status) -> String {
 /// happening", which is exactly what the player call proves. A waveform here
 /// would claim to follow the voice, and nothing in this program knows that.
 pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
-    bar_line_with(status, tick, false, colour)
+    bar_line_with(status, tick, false, colour, 80)
 }
 
 /// [bar_line] with the player's own state: a breath while a sentence is being spoken, and
 /// a pause mark while it is held. Nothing here animates on a pause, because nothing is
 /// happening — that is the point of the mark.
-pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour: bool) -> String {
+pub fn bar_line_with(
+    status: &Status,
+    tick: Option<usize>,
+    paused: bool,
+    colour: bool,
+    width: usize,
+) -> String {
     // The book's number, not this chapter's: the same figure `ls` prints, so a reader never
     // has to remember which of the two they are looking at.
     let percent = status.percent;
-    let track = sparkline(status);
-    let counters = match status.left {
-        Some(seconds) => format!(
-            "ch {}/{} · {}/{} · ~{} left · {} ×{:.2}",
-            status.chapter + 1,
-            status.chapters,
-            status.sentence,
-            status.total,
-            crate::estimate::human(seconds),
-            status.voice,
-            status.speed
-        ),
-        None => format!(
-            "ch {}/{} · {}/{} · {} ×{:.2}",
-            status.chapter + 1,
-            status.chapters,
-            status.sentence,
-            status.total,
-            status.voice,
-            status.speed
-        ),
+    // The line has to fit: a wrapped row breaks the cursor arithmetic the whole block depends
+    // on, so when the terminal is narrow the counters give way before the cells do — time left
+    // first, then the sentence counters, then the voice, because those are the parts a reader
+    // can live without for one chapter.
+    let counters = |time: bool, sentences: bool, voice: bool| -> String {
+        let mut parts: Vec<String> = vec![format!("ch {}/{}", status.chapter + 1, status.chapters)];
+        if sentences {
+            parts.push(format!("{}/{}", status.sentence, status.total));
+        }
+        if let (true, Some(seconds)) = (time, status.left) {
+            parts.push(format!("~{} left", crate::estimate::human(seconds)));
+        }
+        if voice {
+            parts.push(format!("{} ×{:.2}", status.voice, status.speed));
+        }
+        parts.join(" · ")
     };
+
+    let mut chosen = counters(false, false, false);
+    let mut track = String::new();
+    // Below this a cell per chapter is a sliver and the numbers are what a reader can use.
+    let cells_worth_it = width >= 40;
+    for (time, sentences, voice) in [
+        (true, true, true),
+        (true, true, false),
+        (false, true, false),
+        (false, false, false),
+    ] {
+        let candidate = counters(time, sentences, voice);
+        let reserved = 2 + 1 + 4 + 2 + candidate.chars().count() + 3;
+        let budget = width.saturating_sub(reserved);
+        track = if cells_worth_it && budget >= MIN_CELLS {
+            sparkline(status, budget)
+        } else {
+            String::new()
+        };
+        chosen = candidate.clone();
+        let total = 2 + track.chars().count() + 1 + 4 + 2 + candidate.chars().count() + 3;
+        // A handful of cells is the point of the line; a line that fits with none of them has
+        // traded away the book's shape for a voice name.
+        if total <= width && (track.chars().count() >= MIN_CELLS || !cells_worth_it) {
+            break;
+        }
+    }
     let tail = match tick {
         None => "   ".to_string(),
         Some(_) if paused && colour => format!("  {ACCENT}{PAUSE_MARK}{RESET}"),
@@ -517,10 +581,22 @@ pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour:
         Some(tick) if colour => format!("  {ACCENT}{}{RESET}", breath(tick)),
         Some(tick) => format!("  {}", breath(tick)),
     };
+    // A terminal narrower than the counters themselves cannot be satisfied by dropping parts;
+    // the line is then cut rather than allowed to wrap.
     if !colour {
-        return format!("{CLEAR}  {track} {percent:>3}%  {counters}{tail}");
+        return cut(
+            format!("{CLEAR}  {track} {percent:>3}%  {chosen}{tail}"),
+            width,
+        );
     }
-    format!("{CLEAR}  {ACCENT}{track}{RESET} {percent:>3}%  {DIM}{counters}{RESET}{tail}")
+    let coloured =
+        format!("{CLEAR}  {ACCENT}{track}{RESET} {percent:>3}%  {DIM}{chosen}{RESET}{tail}");
+    if visible(&coloured) <= width {
+        return coloured;
+    }
+    // The styling costs no columns but the escapes count as characters if the line is cut, so a
+    // narrow terminal gets the readable plain line instead of a broken coloured one.
+    cut(format!("{CLEAR}  {track} {percent:>3}%  {chosen}"), width)
 }
 
 fn sweep(filled: usize, colour: bool) -> String {
@@ -583,12 +659,55 @@ mod tests {
     }
 
     #[test]
+    fn the_line_fits_the_width_it_was_given() {
+        let mut wide = status(300, 600);
+        wide.chapter = 12;
+        wide.chapters = 27;
+        wide.left = Some(2_400);
+        // 60 columns is where the cells and the counters can still share the line.
+        let line = bar_line_with(&wide, Some(1), false, false, 60);
+        let visible = line.trim_start_matches('\r');
+        assert!(
+            visible.chars().count() <= 60,
+            "a wrapped row breaks the frame arithmetic: {visible:?} is {} columns",
+            visible.chars().count()
+        );
+        assert!(
+            visible.contains("ch 13/27") && visible.contains("300/600"),
+            "the counters survive the cells, not the other way round: {visible:?}"
+        );
+        assert!(
+            visible.contains('█') || visible.contains('░'),
+            "and some of the book's shape is on the line: {visible:?}"
+        );
+
+        // Narrower than the counters themselves: the cells and the time give way, and the line
+        // is still one row.
+        let narrow = bar_line_with(&wide, Some(1), false, false, 30);
+        let visible = narrow.trim_start_matches('\r');
+        assert!(visible.contains("ch 13/27"), "{visible:?}");
+        assert!(
+            visible.chars().count() <= 30,
+            "still one row: {visible:?} is {} columns",
+            visible.chars().count()
+        );
+        assert!(
+            !visible.contains("left"),
+            "time left is the first thing dropped: {visible:?}"
+        );
+        assert!(
+            !visible.contains('█') && !visible.contains('░'),
+            "and below forty columns a cell per chapter is a sliver, not information: {visible:?}"
+        );
+    }
+
+    #[test]
     fn the_sparkline_shows_the_book_by_chapter_not_the_chapter_by_sentence() {
         let mut one = status(0, 100);
         one.chapter = 0;
         one.chapters = 8;
         assert_eq!(
-            sparkline(&one),
+            sparkline(&one, SPARK_CELLS),
             "░░░░░░░░",
             "nothing read yet: every chapter ahead"
         );
@@ -596,7 +715,7 @@ mod tests {
         let mut half = status(50, 100);
         half.chapter = 3;
         half.chapters = 8;
-        let line = sparkline(&half);
+        let line = sparkline(&half, SPARK_CELLS);
         assert_eq!(line.chars().count(), 8, "one cell per chapter: {line:?}");
         assert!(
             line.starts_with("███"),
@@ -612,7 +731,7 @@ mod tests {
         let mut last = status(100, 100);
         last.chapter = 7;
         last.chapters = 8;
-        assert_eq!(sparkline(&last), "████████");
+        assert_eq!(sparkline(&last, SPARK_CELLS), "████████");
     }
 
     #[test]
@@ -620,7 +739,7 @@ mod tests {
         let mut huge = status(50, 100);
         huge.chapter = 100;
         huge.chapters = 400;
-        let line = sparkline(&huge);
+        let line = sparkline(&huge, SPARK_CELLS);
         assert_eq!(line.chars().count(), SPARK_CELLS, "grouped, not truncated");
         let filled = line.chars().filter(|glyph| *glyph == '█').count();
         assert_eq!(
@@ -724,7 +843,7 @@ mod tests {
                 at: 1.0,
                 paused: false,
             },
-            40,
+            100,
         );
         assert!(with.len() > 2, "block plus bar: {with:?}");
         assert!(
@@ -745,7 +864,7 @@ mod tests {
                 at: 0.0,
                 paused: false,
             },
-            40,
+            100,
         );
         assert_eq!(without.len(), 1, "read draws one line and nothing else");
     }
@@ -762,7 +881,7 @@ mod tests {
                 at: 0.0,
                 paused: false,
             },
-            40,
+            100,
         );
         let later = frame(
             &status(3, 40),
@@ -773,7 +892,7 @@ mod tests {
                 at: 3.0,
                 paused: false,
             },
-            40,
+            100,
         );
         assert!(
             start.join("\n").contains(&format!("{ACCENT}{}", "\x1b[4m")),
@@ -889,7 +1008,7 @@ mod tests {
                 at: 0.5,
                 paused: false,
             },
-            40,
+            100,
         );
         let held = frame(
             &status,
@@ -900,7 +1019,7 @@ mod tests {
                 at: 0.5,
                 paused: true,
             },
-            40,
+            100,
         );
 
         let bar_playing = playing.last().expect("bar");
@@ -911,7 +1030,7 @@ mod tests {
             !bar_held.chars().any(|glyph| BREATH.contains(&glyph)),
             "nothing breathes while the book is held: {bar_held:?}"
         );
-        let coloured = bar_line_with(&status, Some(5), true, true);
+        let coloured = bar_line_with(&status, Some(5), true, true, 80);
         assert!(
             coloured.contains(PAUSE_MARK),
             "and the colour path agrees: {coloured:?}"
