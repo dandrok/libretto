@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0](https://github.com/dandrok/libretto/compare/v1.4.0...v1.5.0) - 2026-11-15
+
+### Added
+
+- *(captions)* word timings from the engine, and a fallback when it has none
+
 ## [1.4.0](https://github.com/dandrok/libretto/compare/v1.3.0...v1.4.0) - 2026-11-15
 
 ### Added
