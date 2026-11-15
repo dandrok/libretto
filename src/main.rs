@@ -366,7 +366,11 @@ fn read(
         model: settings.model.clone(),
     };
 
+    // On a terminal the live line carries this and keeps it current; repeating it in the
+    // opening line is the same number twice within one screen. A pipe never sees the live
+    // line, so there it stays.
     let left = chars_left_in_book(&record, chapter_index, start, &sentences)
+        .filter(|_| !ui.interactive())
         .map(|chars| {
             format!(
                 " · ~{} left",

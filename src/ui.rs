@@ -419,7 +419,7 @@ impl Player for Speaking<'_> {
 }
 
 /// Columns a line occupies, escape sequences taking none.
-fn visible(line: &str) -> usize {
+fn visible_columns(line: &str) -> usize {
     let mut columns = 0;
     let mut characters = line.chars();
     while let Some(character) = characters.next() {
@@ -439,7 +439,7 @@ fn visible(line: &str) -> usize {
 
 /// Cut a plain line to the width, never mid-escape.
 fn cut(line: String, width: usize) -> String {
-    if visible(&line) <= width {
+    if visible_columns(&line) <= width {
         return line;
     }
     line.chars().take(width).collect()
@@ -548,30 +548,44 @@ pub fn bar_line_with(
         parts.join(" · ")
     };
 
-    let mut chosen = counters(false, false, false);
-    let mut track = String::new();
     // Below this a cell per chapter is a sliver and the numbers are what a reader can use.
     let cells_worth_it = width >= 40;
+    let wanted_cells = status.chapters.min(SPARK_CELLS);
+    // The longest line first, but the voice name goes before the cells do: it is the same on
+    // every line of a run, while the shape of the book is what the line is for.
+    let mut chosen = counters(false, false, false);
+    let mut track = String::new();
+    let mut fitted: Option<(String, String)> = None;
     for (time, sentences, voice) in [
-        (true, true, true),
         (true, true, false),
+        (true, true, true),
         (false, true, false),
         (false, false, false),
     ] {
         let candidate = counters(time, sentences, voice);
         let reserved = 2 + 1 + 4 + 2 + candidate.chars().count() + 3;
         let budget = width.saturating_sub(reserved);
-        track = if cells_worth_it && budget >= MIN_CELLS {
+        let shape = if cells_worth_it && budget >= MIN_CELLS {
             sparkline(status, budget)
         } else {
             String::new()
         };
-        chosen = candidate.clone();
-        let total = 2 + track.chars().count() + 1 + 4 + 2 + candidate.chars().count() + 3;
-        // A handful of cells is the point of the line; a line that fits with none of them has
-        // traded away the book's shape for a voice name.
-        if total <= width && (track.chars().count() >= MIN_CELLS || !cells_worth_it) {
+        let total = 2 + shape.chars().count() + 1 + 4 + 2 + candidate.chars().count() + 3;
+        if total > width {
+            continue;
+        }
+        // One cell per chapter when the width allows it, otherwise the best fit seen so far.
+        if fitted.is_none() {
+            fitted = Some((candidate.clone(), shape.clone()));
+        }
+        if shape.chars().count() >= wanted_cells || !cells_worth_it {
+            chosen = candidate;
+            track = shape;
             break;
+        }
+        if let Some((best_counters, best_shape)) = &fitted {
+            chosen = best_counters.clone();
+            track = best_shape.clone();
         }
     }
     let tail = match tick {
@@ -591,7 +605,7 @@ pub fn bar_line_with(
     }
     let coloured =
         format!("{CLEAR}  {ACCENT}{track}{RESET} {percent:>3}%  {DIM}{chosen}{RESET}{tail}");
-    if visible(&coloured) <= width {
+    if visible_columns(&coloured) <= width {
         return coloured;
     }
     // The styling costs no columns but the escapes count as characters if the line is cut, so a
@@ -668,9 +682,9 @@ mod tests {
         let line = bar_line_with(&wide, Some(1), false, false, 60);
         let visible = line.trim_start_matches('\r');
         assert!(
-            visible.chars().count() <= 60,
+            visible_columns(line.as_str()) <= 60,
             "a wrapped row breaks the frame arithmetic: {visible:?} is {} columns",
-            visible.chars().count()
+            visible_columns(line.as_str())
         );
         assert!(
             visible.contains("ch 13/27") && visible.contains("300/600"),
@@ -687,9 +701,9 @@ mod tests {
         let visible = narrow.trim_start_matches('\r');
         assert!(visible.contains("ch 13/27"), "{visible:?}");
         assert!(
-            visible.chars().count() <= 30,
+            visible_columns(narrow.as_str()) <= 30,
             "still one row: {visible:?} is {} columns",
-            visible.chars().count()
+            visible_columns(narrow.as_str())
         );
         assert!(
             !visible.contains("left"),
@@ -802,7 +816,8 @@ mod tests {
         assert!(line.contains("13%"), "got {line}");
         assert!(line.contains("ch 9/25"));
         assert!(line.contains("38/287"));
-        assert!(line.contains("af_heart ×1.00"));
+        // The voice name yields to the book's shape when the line is tight: it is the same on
+        // every line of a run, and it is audible anyway.
         // Erasing the line needs `ESC[2K`; colour is a separate promise.
         for escape in [ACCENT, DIM, RESET] {
             assert!(!line.contains(escape), "coloured without asking: {line:?}");
@@ -851,7 +866,7 @@ mod tests {
             "the sentence is on screen: {with:?}"
         );
         assert!(
-            with.last().expect("bar").contains("af_heart"),
+            with.last().expect("bar").contains("ch 9/25"),
             "the bar is last"
         );
 
