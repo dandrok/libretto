@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.9.0](https://github.com/dandrok/libretto/compare/v1.8.0...v1.9.0) - 2026-11-15
+
+### Added
+
+- *(ui)* a bracketed meter instead of a cell per chapter
+- *(follow)* a long sentence scrolls instead of growing the block
+- *(ui)* the live line speaks the book's language
+- *(config)* keep the sync offset in the file, where a machine property belongs
+- *(follow)* tighten the underline against the voice
+
+### Fixed
+
+- *(ui)* the percentage sits right next to the cells
+- *(ui)* one countdown, and the cells before the voice
+- *(ui)* keep the line inside the width it was given
+- *(cli)* let --sync-offset accept the sign it documents
+
 ## [1.8.0](https://github.com/dandrok/libretto/compare/v1.7.0...v1.8.0) - 2026-11-15
 
 ### Added
