@@ -8,6 +8,14 @@ git_release_enable = true
 git_tag_enable = true
 git_release_name = "v{{version}}"
 
+# The CLI is the product; the library's types describe the on-disk index, not an API
+# anyone is asked to build on. With this on, cargo-semver-checks promotes every field
+# added to a `pub` struct to a major version — `BookRecord.sentence_counts` spent 2.0.0
+# that way — which makes the release page announce a break for a change that breaks no
+# caller. Re-enable it the day a consumer exists, and make `BookRecord`
+# non-exhaustive in the same commit so the added field stops being a break at all.
+semver_check = false
+
 [[package]]
 name = "libretto"
 publish = true
