@@ -14,16 +14,19 @@
 //! timing list that does not cover the sentence word for word would highlight the wrong
 //! word from the first mismatch onwards, so it is discarded instead.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One spoken word, timed against the start of its sentence.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Word {
     /// The word as the engine rendered it, without surrounding whitespace.
+    #[serde(rename = "word", alias = "text")]
     pub text: String,
     /// Seconds from the start of the sentence's audio.
+    #[serde(rename = "start_time", alias = "start")]
     pub start: f32,
     /// Seconds from the start of the sentence's audio.
+    #[serde(rename = "end_time", alias = "end")]
     pub end: f32,
 }
 
@@ -65,7 +68,27 @@ pub fn parse_reply(body: &[u8]) -> Option<Vec<Word>> {
             end: raw.end_time,
         });
     }
-    Some(words)
+    Some(merge_punctuation(&words))
+}
+
+/// Caption tokens the way the printed sentence splits them. The engine emits punctuation
+/// as its own token — a real reply for `…needed functionality.` ends with `{.}` — while the
+/// sentence keeps the period attached, so a punctuation-only token is folded into the word
+/// before it. Without this every sentence that ends in a full stop fails [`aligns`] and the
+/// read-along silently falls back to interpolation.
+pub fn merge_punctuation(words: &[Word]) -> Vec<Word> {
+    let mut merged: Vec<Word> = Vec::with_capacity(words.len());
+    for word in words {
+        let punctuation_only = !word
+            .text
+            .chars()
+            .any(|character| character.is_alphanumeric());
+        match (punctuation_only, merged.last_mut()) {
+            (true, Some(previous)) => previous.end = word.end,
+            _ => merged.push(word.clone()),
+        }
+    }
+    merged
 }
 
 /// Whether a timing list covers `text` word for word. Timings that describe a
@@ -212,6 +235,29 @@ mod tests {
         assert_eq!(index_at(&words, 1.5), Some(1));
         assert_eq!(index_at(&words, 99.0), Some(2), "past the last word");
         assert_eq!(index_at(&[], 1.0), None);
+    }
+
+    #[test]
+    fn punctuation_of_its_own_belongs_to_the_word_before_it() {
+        // Exactly what Kokoro-FastAPI answered for
+        // "Such applications are … commonly needed functionality.": fifteen tokens, the
+        // last of them a bare full stop.
+        let reply = r#"{"audio":"AAAA","timestamps":[
+            {"word":"Such","start_time":0.038,"end_time":0.263},
+            {"word":"applications","start_time":0.263,"end_time":1.113},
+            {"word":"functionality","start_time":5.213,"end_time":6.263},
+            {"word":".","start_time":6.263,"end_time":6.388}]}"#;
+        let words = parse_reply(reply.as_bytes()).expect("timings");
+        assert_eq!(words.len(), 3, "the full stop is not a word: {words:?}");
+        assert_eq!(words[2].text, "functionality");
+        assert!(
+            (words[2].end - 6.388).abs() < 1e-6,
+            "and it keeps the time the stop took: {words:?}"
+        );
+        assert!(
+            aligns(&words, "Such applications functionality."),
+            "which is how the printed sentence splits"
+        );
     }
 
     #[test]

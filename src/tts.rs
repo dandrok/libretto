@@ -3,7 +3,13 @@
 
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+use base64::Engine as _;
+use serde::Deserialize;
 use thiserror::Error;
+
+use crate::captions::{self, Word};
 
 /// One request for one sentence. The cache key is derived from every field, so
 /// changing the voice or the speed is a different piece of audio.
@@ -64,12 +70,43 @@ pub enum TtsError {
 /// allocate — the same rule as a zip entry or a state file.
 const MAX_AUDIO_BYTES: u64 = 32 * 1024 * 1024;
 
+/// One sentence's audio, and the engine's own word timings when it can give them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Speech {
+    pub audio: Vec<u8>,
+    /// `None` when the engine has no such thing, or declined to answer this time.
+    pub words: Option<Vec<Word>>,
+}
+
 /// Anything that can turn a sentence into mp3 bytes.
 ///
 /// `Send + Sync` because the playback loop synthesizes on a worker thread while
 /// the main thread plays: engines are shared, not owned per sentence.
 pub trait TtsEngine: Send + Sync {
     fn synthesize(&self, request: &SpeechRequest) -> Result<Vec<u8>, TtsError>;
+
+    /// The same sentence, asking for word timings as well. The default is a plain
+    /// sentence: word timings are a Kokoro extension, not part of the OpenAI shape every
+    /// other server speaks.
+    fn synthesize_captioned(&self, request: &SpeechRequest) -> Result<Speech, TtsError> {
+        Ok(Speech {
+            audio: self.synthesize(request)?,
+            words: None,
+        })
+    }
+}
+
+/// Where a captioned sentence is asked for: the same server, a sibling path. Kokoro serves
+/// `/v1/audio/speech` and `/dev/captioned_speech`, so a configured `/v1` becomes `/dev`. An
+/// endpoint whose last segment is not a version has no sibling we can guess, and the
+/// read-along interpolates instead of guessing.
+pub fn captioned_url(endpoint: &str) -> Option<String> {
+    let (base, last) = endpoint.rsplit_once('/')?;
+    let version = last.strip_prefix('v').filter(|digits| !digits.is_empty())?;
+    if !version.chars().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("{base}/dev/captioned_speech"))
 }
 
 /// Kokoro-FastAPI (or any server speaking the OpenAI speech shape).
@@ -77,6 +114,17 @@ pub struct Kokoro {
     endpoint: String,
     agent: ureq::Agent,
     max_audio_bytes: u64,
+    /// Whether captioned speech works here: 0 unknown, 2 no, anything else yes. One
+    /// refusal per run is enough — asking 600 times to be told the same 404 is what makes
+    /// a feature feel broken.
+    captions: AtomicU8,
+}
+
+/// What a captioned reply carries. The timings inside the same body are read by
+/// [`crate::captions::parse_reply`].
+#[derive(Deserialize)]
+struct CaptionedReply {
+    audio: String,
 }
 
 impl Kokoro {
@@ -105,15 +153,101 @@ impl Kokoro {
             endpoint,
             agent,
             max_audio_bytes,
+            captions: AtomicU8::new(0),
         })
     }
 
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
+
+    fn captioned(&self, request: &SpeechRequest) -> Option<Result<Speech, TtsError>> {
+        if self.captions.load(Ordering::Relaxed) == 2 {
+            return None;
+        }
+        let url = captioned_url(&self.endpoint)?;
+        Some(self.post_captioned(&url, request))
+    }
+
+    fn post_captioned(&self, url: &str, request: &SpeechRequest) -> Result<Speech, TtsError> {
+        let body = serde_json::json!({
+            "model": request.model,
+            "input": request.text,
+            "voice": request.voice,
+            "speed": request.speed,
+            "response_format": "mp3",
+            "stream": false,
+        });
+        let mut response = self
+            .agent
+            .post(url)
+            .header("Content-Type", "application/json")
+            .send_json(&body)
+            .map_err(|error| match error {
+                ureq::Error::StatusCode(status) => TtsError::Status {
+                    endpoint: self.endpoint.clone(),
+                    status,
+                },
+                other => TtsError::Unreachable {
+                    endpoint: self.endpoint.clone(),
+                    reason: other.to_string(),
+                },
+            })?;
+        // The audio comes back base64'd inside JSON: a third bigger on the wire, bounded by
+        // the same ceiling as a plain reply.
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(self.max_audio_bytes.saturating_mul(2))
+            .read_to_vec()
+            .map_err(|error| TtsError::Unreachable {
+                endpoint: self.endpoint.clone(),
+                reason: error.to_string(),
+            })?;
+        let words = captions::parse_reply(&bytes);
+        let reply: CaptionedReply =
+            serde_json::from_slice(&bytes).map_err(|error| TtsError::Unreachable {
+                endpoint: self.endpoint.clone(),
+                reason: format!("captioned reply was not JSON: {error}"),
+            })?;
+        let audio = base64::engine::general_purpose::STANDARD
+            .decode(&reply.audio)
+            .map_err(|error| TtsError::Unreachable {
+                endpoint: self.endpoint.clone(),
+                reason: format!("captioned reply carried unusable audio: {error}"),
+            })?;
+        if audio.is_empty() {
+            return Err(TtsError::Empty {
+                endpoint: self.endpoint.clone(),
+            });
+        }
+        if audio.len() as u64 > self.max_audio_bytes {
+            return Err(TtsError::TooLarge {
+                endpoint: self.endpoint.clone(),
+                limit_bytes: self.max_audio_bytes,
+            });
+        }
+        Ok(Speech { audio, words })
+    }
 }
 
 impl TtsEngine for Kokoro {
+    /// A refusal on this path means this server has no captioned speech — not that the
+    /// endpoint is broken — so the sentence is asked for the plain way and no later
+    /// sentence tries again.
+    fn synthesize_captioned(&self, request: &SpeechRequest) -> Result<Speech, TtsError> {
+        if let Some(attempt) = self.captioned(request) {
+            match attempt {
+                Ok(speech) => return Ok(speech),
+                Err(_) => self.captions.store(2, Ordering::Relaxed),
+            }
+        }
+        Ok(Speech {
+            audio: self.synthesize(request)?,
+            words: None,
+        })
+    }
+
     fn synthesize(&self, request: &SpeechRequest) -> Result<Vec<u8>, TtsError> {
         let url = format!("{}/audio/speech", self.endpoint);
         let body = serde_json::json!({
@@ -169,5 +303,56 @@ impl TtsEngine for Kokoro {
             });
         }
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_versioned_endpoint_has_a_captioned_sibling() {
+        assert_eq!(
+            captioned_url("https://tts.example.com:8880/v1").as_deref(),
+            Some("https://tts.example.com:8880/dev/captioned_speech")
+        );
+        assert_eq!(
+            captioned_url("https://tts.example.com/openai/v2").as_deref(),
+            Some("https://tts.example.com/openai/dev/captioned_speech")
+        );
+    }
+
+    #[test]
+    fn an_endpoint_we_cannot_guess_is_not_guessed() {
+        assert_eq!(
+            captioned_url("https://tts.example.com"),
+            None,
+            "no path at all"
+        );
+        assert_eq!(
+            captioned_url("https://tts.example.com/api"),
+            None,
+            "not a version"
+        );
+        assert_eq!(
+            captioned_url("https://tts.example.com/v"),
+            None,
+            "v alone is not one"
+        );
+    }
+
+    #[test]
+    fn a_plain_engine_says_it_has_no_timings() {
+        struct Plain;
+        impl TtsEngine for Plain {
+            fn synthesize(&self, _request: &SpeechRequest) -> Result<Vec<u8>, TtsError> {
+                Ok(b"ID3".to_vec())
+            }
+        }
+        let speech = Plain
+            .synthesize_captioned(&SpeechRequest::new("x"))
+            .expect("plain speech");
+        assert_eq!(speech.audio, b"ID3");
+        assert_eq!(speech.words, None, "and the caller interpolates instead");
     }
 }

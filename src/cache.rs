@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::captions::Word;
 use crate::paths;
 use crate::tts::{SpeechRequest, TtsEngine, TtsError};
 
@@ -24,6 +25,11 @@ pub enum CacheError {
     },
     #[error(transparent)]
     Tts(#[from] TtsError),
+    #[error("cannot store the word timings: {source}")]
+    Json {
+        #[source]
+        source: serde_json::Error,
+    },
     #[error(transparent)]
     Path(#[from] paths::PathError),
 }
@@ -87,8 +93,59 @@ impl Cache {
         Ok(path)
     }
 
-    /// The one place synthesis and storage meet: return a playable file,
-    /// synthesizing only when the key is absent.
+    /// Where the word timings for a cached sentence live: beside its audio, same key, so
+    /// the pair is written and deleted together.
+    fn timings_path(&self, key: &str) -> PathBuf {
+        self.path_for(key).with_extension("json")
+    }
+
+    /// The engine's own word timings for a cached sentence, if they were stored. A
+    /// missing sidecar is not an error: the read-along interpolates instead, and the
+    /// audio is never re-synthesized to find out.
+    pub fn timings(&self, key: &str) -> Option<Vec<Word>> {
+        let text = fs::read_to_string(self.timings_path(key)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn put_timings(&self, key: &str, words: &[Word]) -> Result<(), CacheError> {
+        let path = self.timings_path(key);
+        let dir = path.parent().unwrap_or(&self.root);
+        fs::create_dir_all(dir).map_err(|source| CacheError::Io { source })?;
+        restrict_dir(dir)?;
+        let body = serde_json::to_vec(words).map_err(|source| CacheError::Json { source })?;
+
+        let temp = dir.join(format!("{key}.json.tmp"));
+        let mut file = create_exclusive(&temp)?;
+        restrict_file(&file)?;
+        file.write_all(&body)
+            .and_then(|()| file.sync_all())
+            .map_err(|source| CacheError::Io { source })?;
+        drop(file);
+        fs::rename(&temp, &path).map_err(|source| CacheError::Io { source })
+    }
+
+    /// The one place synthesis and storage meet: a playable file, and the word timings the
+    /// engine could give for it. A cache hit costs no request at all.
+    pub fn audio_with_timings(
+        &self,
+        engine: &dyn TtsEngine,
+        request: &SpeechRequest,
+    ) -> Result<(PathBuf, Option<Vec<Word>>), CacheError> {
+        let key = Self::key(request);
+        if let Some(hit) = self.get(&key) {
+            return Ok((hit, self.timings(&key)));
+        }
+        let speech = engine.synthesize_captioned(request)?;
+        let path = self.put(&key, &speech.audio)?;
+        if let Some(words) = &speech.words {
+            self.put_timings(&key, words)?;
+        }
+        Ok((path, speech.words))
+    }
+
+    /// The audio alone, for callers that do not draw a read-along — `read` is one request
+    /// per sentence and stays that way. A sentence first heard this way has no sidecar,
+    /// and a later `follow` interpolates rather than asking again.
     pub fn audio_for(
         &self,
         engine: &dyn TtsEngine,

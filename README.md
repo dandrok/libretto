@@ -151,10 +151,17 @@ is held. A player that cannot answer (`--player ffplay`) falls back to a clock s
 launch: it keeps moving while paused, and the line cannot show that it is held, which is the
 price of the fallback.
 
-Word timings come from the engine when it has them: Kokoro's captioned-speech endpoint
-returns word-level offsets generated during synthesis, and they are cached beside the audio
-so a replay costs no requests. Any other endpoint returns none, and then the words are
-spread over the sentence by length — the same word goes past, a little less precisely.
+The word being underlined comes from the voice itself whenever the server can say: Kokoro
+serves `/dev/captioned_speech` next to `/v1/audio/speech`, returning per-word offsets made
+during synthesis. They are stored beside the audio, so a replay costs no request and still
+knows the words.
+
+Everything else falls back honestly. An endpoint without that path (everything that is not
+Kokoro), or a timing list that does not cover the sentence word for word — the engine
+normalises text, and punctuation arrives as its own token — and the words are spread over
+the sentence by length instead: the same word goes past, a little less precisely. `read`
+never asks for timings at all, which is why it is still one request per sentence.
+
 `--width N` (else `$COLUMNS`, else 80) decides where the text wraps. Piped, or with
 `--quiet`, `follow` is byte-for-byte `read`.
 

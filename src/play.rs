@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 use crate::cache::{Cache, CacheError};
+use crate::captions::Word;
 use crate::tts::{SpeechRequest, TtsEngine, TtsError};
 
 /// How far ahead the synthesizer may run. Synthesis is 4–5× faster than speech,
@@ -253,6 +254,10 @@ pub struct Session<'a> {
     pub cache: &'a Cache,
     /// Voice, speed and model; `text` is replaced per sentence.
     pub template: &'a SpeechRequest,
+    /// Ask the engine for word timings as well. Only a read-along needs them, and asking
+    /// costs a refused request on an endpoint that has no such thing — so `read`, which
+    /// draws nothing, does not ask.
+    pub captions: bool,
 }
 
 /// Play `sentences[start..]`, stopping after `limit` sentences if given.
@@ -265,12 +270,16 @@ pub fn play_sentences(
     sentences: &[String],
     start: usize,
     limit: Option<usize>,
+    mut on_speaking: impl FnMut(usize, Option<&[Word]>),
     mut on_played: impl FnMut(usize),
 ) -> Result<Played, PlayError> {
     let engine = session.engine;
     let player = session.player;
     let cache = session.cache;
     let template = session.template;
+    // Read out before the worker is spawned: the closure must not capture the session,
+    // which holds a `&dyn Player` that is not `Sync`.
+    let captions = session.captions;
     let total = sentences.len();
     let begin = start.min(total);
     let end = match limit {
@@ -294,15 +303,22 @@ pub fn play_sentences(
 
     std::thread::scope(|scope| -> Result<(), PlayError> {
         // Bounded so a fast synthesizer cannot run away with memory.
-        let (tx, rx) =
-            mpsc::sync_channel::<(usize, bool, Result<PathBuf, CacheError>)>(DEFAULT_LEAD);
+        let (tx, rx) = mpsc::sync_channel::<(
+            usize,
+            bool,
+            Result<(PathBuf, Option<Vec<Word>>), CacheError>,
+        )>(DEFAULT_LEAD);
         let worker = scope.spawn(move || {
             for (index, text) in sentences.iter().enumerate().take(end).skip(begin) {
                 let mut request = template.clone();
                 request.text = text.clone();
                 let key = Cache::key(&request);
                 let hit = cache.get(&key).is_some();
-                let result = cache.audio_for(engine, &request);
+                let result = if captions {
+                    cache.audio_with_timings(engine, &request)
+                } else {
+                    cache.audio_for(engine, &request).map(|path| (path, None))
+                };
                 // The receiver is gone only when playback already failed.
                 if tx.send((index, hit, result)).is_err() {
                     break;
@@ -311,10 +327,10 @@ pub fn play_sentences(
         });
 
         for (index, hit, result) in rx {
-            let path = match result {
-                Ok(path) => {
+            let (path, words) = match result {
+                Ok(audio) => {
                     silent_run = 0;
-                    path
+                    audio
                 }
                 // One fragment the engine cannot voice is not a broken book: skip it and
                 // keep reading. A run of them means the endpoint is the problem, so the
@@ -330,6 +346,9 @@ pub fn play_sentences(
                 }
                 Err(error) => return Err(error.into()),
             };
+            // Whoever draws gets the words before the audio starts, so the first frame of
+            // a sentence already knows its timings.
+            on_speaking(index, words.as_deref());
             player.play(&path)?;
             if hit {
                 cache_hits += 1;
@@ -357,7 +376,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use crate::tts::TtsError;
+    use crate::tts::{Speech, TtsError};
 
     struct RecordingPlayer {
         played: RefCell<Vec<PathBuf>>,
@@ -403,6 +422,22 @@ mod tests {
         }
     }
 
+    /// Answers with two word timings per sentence, so the wiring to the view is visible.
+    struct CaptionedEngine;
+
+    impl TtsEngine for CaptionedEngine {
+        fn synthesize(&self, _request: &SpeechRequest) -> Result<Vec<u8>, TtsError> {
+            Ok(b"ID3".to_vec())
+        }
+
+        fn synthesize_captioned(&self, request: &SpeechRequest) -> Result<Speech, TtsError> {
+            Ok(Speech {
+                audio: b"ID3".to_vec(),
+                words: Some(crate::captions::interpolate(&request.text, 1.0)),
+            })
+        }
+    }
+
     /// Answers with an empty body for any sentence containing `needle`, the way a real
     /// engine answers a fragment with nothing to pronounce.
     struct SilentFor {
@@ -443,12 +478,18 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
         let mut positions = Vec::new();
 
-        let result = play_sentences(&session, &sentences(4), 1, Some(2), |next| {
-            positions.push(next)
-        })
+        let result = play_sentences(
+            &session,
+            &sentences(4),
+            1,
+            Some(2),
+            |_, _| {},
+            |next| positions.push(next),
+        )
         .expect("plays");
 
         assert_eq!(result.count, 2);
@@ -470,10 +511,12 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
 
-        play_sentences(&session, &sentences(3), 0, None, |_| {}).expect("first");
-        let second = play_sentences(&session, &sentences(3), 0, None, |_| {}).expect("second");
+        play_sentences(&session, &sentences(3), 0, None, |_, _| {}, |_| {}).expect("first");
+        let second =
+            play_sentences(&session, &sentences(3), 0, None, |_, _| {}, |_| {}).expect("second");
 
         assert_eq!(engine.calls(), 3, "synthesized once per sentence");
         assert_eq!(second.cache_hits, 3, "the second pass is all hits");
@@ -491,9 +534,11 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
 
-        let result = play_sentences(&session, &sentences(2), 9, None, |_| {}).expect("no work");
+        let result =
+            play_sentences(&session, &sentences(2), 9, None, |_, _| {}, |_| {}).expect("no work");
 
         assert_eq!(result.count, 0);
         assert_eq!(result.next, 2, "clamped to the end, not past it");
@@ -512,12 +557,18 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
         let mut positions = Vec::new();
 
-        let error = play_sentences(&session, &sentences(5), 0, None, |next| {
-            positions.push(next)
-        })
+        let error = play_sentences(
+            &session,
+            &sentences(5),
+            0,
+            None,
+            |_, _| {},
+            |next| positions.push(next),
+        )
         .expect_err("the player failed");
 
         assert!(matches!(error, PlayError::Exit { .. }), "got {error}");
@@ -542,6 +593,7 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
         let lines = vec![
             "Sentence 0.".to_string(),
@@ -550,8 +602,15 @@ mod tests {
         ];
         let mut positions = Vec::new();
 
-        let result = play_sentences(&session, &lines, 0, None, |next| positions.push(next))
-            .expect("the book continues");
+        let result = play_sentences(
+            &session,
+            &lines,
+            0,
+            None,
+            |_, _| {},
+            |next| positions.push(next),
+        )
+        .expect("the book continues");
 
         assert_eq!(result.count, 2, "two sentences were played");
         assert_eq!(result.skipped, 1, "the fragment was stepped over");
@@ -574,9 +633,10 @@ mod tests {
             player: &player,
             cache: &cache,
             template: &template,
+            captions: false,
         };
 
-        let error = play_sentences(&session, &sentences(20), 0, None, |_| {})
+        let error = play_sentences(&session, &sentences(20), 0, None, |_, _| {}, |_| {})
             .expect_err("silence everywhere is a broken endpoint");
 
         assert!(
@@ -690,5 +750,48 @@ mod tests {
             None
         );
         assert_eq!(reply_data("not json", serde_json::Value::as_f64), None);
+    }
+
+    #[test]
+    fn the_words_of_a_sentence_reach_the_caller_before_it_plays() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::at(dir.path());
+        let engine = CaptionedEngine;
+        let player = recording_player(None);
+        let template = SpeechRequest::new("");
+        let session = Session {
+            engine: &engine,
+            player: &player,
+            cache: &cache,
+            template: &template,
+            captions: true,
+        };
+        let lines = vec!["one two".to_string(), "three four five".to_string()];
+
+        let mut seen: Vec<(usize, usize)> = Vec::new();
+        let mut played_before = Vec::new();
+        play_sentences(
+            &session,
+            &lines,
+            0,
+            None,
+            |index, words| {
+                played_before.push(player.played.borrow().len());
+                seen.push((index, words.map(|words| words.len()).unwrap_or(0)));
+            },
+            |_| {},
+        )
+        .expect("plays");
+
+        assert_eq!(
+            seen,
+            vec![(0, 2), (1, 3)],
+            "the timings match each sentence"
+        );
+        assert_eq!(
+            played_before,
+            vec![0, 1],
+            "and they arrive before that sentence is handed to the player"
+        );
     }
 }
