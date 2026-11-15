@@ -40,6 +40,14 @@ fn add_creates_one_entry() {
     assert_eq!(entry["title"], "Grokking Algorithms");
     assert_eq!(entry["author"], "Ursula K. Le Guin");
     assert_eq!(entry["chapter_count"], 2);
+    let counts = entry["sentence_counts"]
+        .as_array()
+        .expect("sentence counts are recorded at add");
+    assert_eq!(counts.len(), 2, "one count per chapter: {counts:?}");
+    assert!(
+        counts.iter().all(|count| count.as_u64().unwrap_or(0) > 0),
+        "every chapter of the fixture has prose: {counts:?}"
+    );
     assert!(
         entry["source_path"]
             .as_str()

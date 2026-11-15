@@ -63,7 +63,37 @@ pub struct BookRecord {
     pub source_path: String,
     pub content_hash: String,
     pub chapter_count: usize,
+    /// Sentences per chapter, in reading order, counted with the same splitter
+    /// `read` uses, so `ls` can report a position inside a chapter. Records
+    /// written before 1.3.0 have no counts and fall back to chapter boundaries.
+    #[serde(default)]
+    pub sentence_counts: Vec<usize>,
     pub added_at: u64,
+}
+
+impl BookRecord {
+    /// How far into the book the stored position is, in whole percent. `None`
+    /// when this record cannot answer exactly: no counts at all (a library
+    /// written before 1.3.0), or a count list that disagrees with
+    /// `chapter_count` (a hand-edited index).
+    pub fn sentence_percent(&self, progress: Progress) -> Option<u8> {
+        let total: usize = self.sentence_counts.iter().sum();
+        if total == 0 || self.sentence_counts.len() != self.chapter_count {
+            return None;
+        }
+        let behind: usize = self
+            .sentence_counts
+            .iter()
+            .take(progress.chapter_index)
+            .sum();
+        let within = self
+            .sentence_counts
+            .get(progress.chapter_index)
+            .copied()
+            .unwrap_or(0)
+            .min(progress.sentence_index);
+        Some((behind.saturating_add(within).saturating_mul(100) / total).min(100) as u8)
+    }
 }
 
 /// Where the reader stopped. Sentence granularity, because a chapter is 20 minutes.
@@ -153,14 +183,19 @@ impl Library {
         self.progress.get(id).copied().unwrap_or_default()
     }
 
-    /// Fraction of the book behind the reader, by chapter. Sentence-level
-    /// precision would need the chapter's length, which is not in the record.
+    /// Fraction of the book behind the reader. Sentence-exact when the record
+    /// carries `sentence_counts` (every book added since 1.3.0); a record
+    /// without them gets chapter granularity, which is all the index alone can
+    /// support.
     pub fn percent_of(&self, record: &BookRecord) -> u8 {
+        let progress = self.progress_of(&record.id);
+        if let Some(percent) = record.sentence_percent(progress) {
+            return percent;
+        }
         if record.chapter_count == 0 {
             return 0;
         }
-        let chapter = self.progress_of(&record.id).chapter_index;
-        (chapter.saturating_mul(100) / record.chapter_count).min(100) as u8
+        (progress.chapter_index.saturating_mul(100) / record.chapter_count).min(100) as u8
     }
 }
 
@@ -415,7 +450,18 @@ mod tests {
             source_path: "/tmp/x.epub".to_string(),
             content_hash: hash.to_string(),
             chapter_count: 10,
+            sentence_counts: Vec::new(),
             added_at: 0,
+        }
+    }
+
+    /// A record that can answer exactly: one count per chapter, as given.
+    fn sized(id: &str, counts: &[usize]) -> BookRecord {
+        BookRecord {
+            id: id.to_string(),
+            chapter_count: counts.len(),
+            sentence_counts: counts.to_vec(),
+            ..record(id, "hash")
         }
     }
 
@@ -629,5 +675,99 @@ mod tests {
         }
         let reloaded = store.load().expect("reloads");
         assert_eq!(reloaded.books.len(), 1);
+    }
+
+    #[test]
+    fn a_percentage_lands_inside_the_chapter_the_reader_is_in() {
+        let mut library = Library::default();
+        let book = sized("sized-1111", &[10, 10, 10]);
+        library.progress.insert(
+            book.id.clone(),
+            Progress {
+                chapter_index: 1,
+                sentence_index: 5,
+                updated_at: 0,
+            },
+        );
+        assert_eq!(
+            library.percent_of(&book),
+            50,
+            "15 of 30 sentences — not the 33% a chapter count alone gives"
+        );
+    }
+
+    #[test]
+    fn the_last_sentence_of_a_book_is_one_hundred_percent() {
+        let mut library = Library::default();
+        let book = sized("sized-2222", &[10, 10, 10]);
+        library.progress.insert(
+            book.id.clone(),
+            Progress {
+                chapter_index: 2,
+                sentence_index: 10,
+                updated_at: 0,
+            },
+        );
+        assert_eq!(library.percent_of(&book), 100);
+    }
+
+    #[test]
+    fn a_position_past_the_end_does_not_overflow_the_percentage() {
+        let mut library = Library::default();
+        let book = sized("sized-3333", &[4, 4]);
+        library.progress.insert(
+            book.id.clone(),
+            Progress {
+                chapter_index: 9,
+                sentence_index: 9999,
+                updated_at: 0,
+            },
+        );
+        assert_eq!(library.percent_of(&book), 100, "clamped, never 250%");
+    }
+
+    #[test]
+    fn a_record_without_counts_still_reports_by_chapter() {
+        let mut library = Library::default();
+        let book = record("old-4444", "h2");
+        library.progress.insert(
+            book.id.clone(),
+            Progress {
+                chapter_index: 2,
+                sentence_index: 40,
+                updated_at: 0,
+            },
+        );
+        assert_eq!(library.percent_of(&book), 20, "2 of 10 chapters");
+    }
+
+    #[test]
+    fn a_count_list_that_disagrees_with_the_chapter_count_is_ignored() {
+        let mut library = Library::default();
+        let mut book = record("odd-5555", "h3");
+        book.sentence_counts = vec![10, 10, 10];
+        library.progress.insert(
+            book.id.clone(),
+            Progress {
+                chapter_index: 1,
+                sentence_index: 0,
+                updated_at: 0,
+            },
+        );
+        assert_eq!(
+            library.percent_of(&book),
+            10,
+            "three counts for ten chapters is a stale index, not a position"
+        );
+    }
+
+    #[test]
+    fn a_library_written_before_sentence_counts_still_loads() {
+        let json = r#"{"version":1,"books":[{"id":"a-1111","title":"A","author":null,"source_path":"/tmp/a.epub","content_hash":"h","chapter_count":2,"added_at":0}],"progress":{},"last_read":null}"#;
+        let library: Library = serde_json::from_str(json).expect("an older index loads");
+        assert!(
+            library.books[0].sentence_counts.is_empty(),
+            "absent, not invented"
+        );
     }
 }

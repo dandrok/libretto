@@ -94,3 +94,41 @@ fn bare_invocation_on_an_empty_library_is_not_an_error() {
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("no books"));
 }
+
+/// An index with per-chapter sentence counts, for the percentage tests below.
+fn seed_index(sandbox: &Sandbox, counts: &str) {
+    std::fs::create_dir_all(sandbox.data_dir()).expect("data dir");
+    std::fs::write(
+        sandbox.library_path(),
+        format!(
+            r#"{{"version":1,"books":[{{"id":"sized-book-aaaa","title":"A Sized Book","author":null,"source_path":"/books/sized.epub","content_hash":"hash","chapter_count":3,{counts}"added_at":0}}],"progress":{{"sized-book-aaaa":{{"chapter_index":1,"sentence_index":5,"updated_at":0}}}},"last_read":null}}"#
+        ),
+    )
+    .expect("seed library");
+}
+
+#[test]
+fn ls_reports_a_percentage_inside_the_chapter_the_reader_is_in() {
+    let sandbox = Sandbox::new();
+    // Three chapters of ten sentences; five sentences into the second is 15 of
+    // 30 — 50%. Counting chapters alone would say 33%.
+    seed_index(&sandbox, r#""sentence_counts":[10,10,10],"#);
+
+    let stdout = sandbox.stdout_of(&["ls"]);
+    assert!(stdout.contains(" 50%"), "sentence-exact: {stdout}");
+    assert!(
+        stdout.contains("ch 2/3"),
+        "chapter position is still shown: {stdout}"
+    );
+}
+
+#[test]
+fn ls_falls_back_to_chapter_granularity_for_an_old_record() {
+    let sandbox = Sandbox::new();
+    // The same position in an index written before the counts existed.
+    seed_index(&sandbox, "");
+
+    let stdout = sandbox.stdout_of(&["ls"]);
+    assert!(stdout.contains(" 33%"), "chapter granularity: {stdout}");
+    assert!(stdout.contains("ch 2/3"), "{stdout}");
+}

@@ -151,6 +151,16 @@ fn load_book(path: &Path) -> Result<epub::Book, AppError> {
     })
 }
 
+/// Sentences per chapter, counted with the same splitter `read` uses, so a
+/// percentage taken from these counts lands on the sentence that will actually
+/// be spoken.
+fn chapter_sentence_counts(book: &epub::Book) -> Vec<usize> {
+    book.chapters
+        .iter()
+        .map(|chapter| text::sentences(&chapter.text, SENTENCE_LIMIT).len())
+        .collect()
+}
+
 fn add(store: &Store, path: &Path) -> Result<(), AppError> {
     let hash = store::hash_file(path)?;
     let mut library = store.load()?;
@@ -177,6 +187,7 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
         source_path,
         content_hash: hash,
         chapter_count: book.chapters.len(),
+        sentence_counts: chapter_sentence_counts(&book),
         added_at: store::now_seconds(),
     };
     library.insert(record);
@@ -233,7 +244,7 @@ fn read(
 ) -> Result<(), AppError> {
     let mut library = store.load()?;
     // Cloned: the progress closure below mutates the library while this is read.
-    let record = pick_book(&library, request.id.as_deref())?.clone();
+    let mut record = pick_book(&library, request.id.as_deref())?.clone();
 
     let ui = Ui::new(quiet);
     let settings = Settings::resolve(&config::load()?, overrides);
@@ -247,6 +258,17 @@ fn read(
     verify_unchanged(&book_path, &record)?;
     let book = load_book(&book_path)?;
     let progress = library.progress_of(&record.id);
+
+    // A library written before 1.3.0 carries no per-chapter sentence counts, so
+    // `ls` could only report chapter boundaries. The book is open right now:
+    // count it and put the result in the in-memory index, so the position saves
+    // below carry it and the next `ls` is exact.
+    if record.sentence_percent(progress).is_none() && record.chapter_count == book.chapters.len() {
+        record.sentence_counts = chapter_sentence_counts(&book);
+        if let Some(slot) = library.books.iter_mut().find(|book| book.id == record.id) {
+            *slot = record.clone();
+        }
+    }
 
     let chapter_index = request
         .chapter

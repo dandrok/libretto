@@ -387,3 +387,46 @@ fn a_piped_read_stays_plain_and_quiet_is_accepted() {
         "--quiet stays plain"
     );
 }
+
+#[test]
+fn read_fills_in_sentence_counts_for_a_library_added_before_them() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "sized.epub",
+        Some("Sized Book"),
+        &[
+            ("One", "First sentence. Second sentence."),
+            ("Two", "Third sentence."),
+        ],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    // Rewrite the index without the counts, exactly as a library written
+    // before 1.3.0 would look.
+    let text = std::fs::read_to_string(sandbox.library_path()).expect("library");
+    let mut json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    json["books"][0]
+        .as_object_mut()
+        .expect("book object")
+        .remove("sentence_counts");
+    std::fs::write(sandbox.library_path(), json.to_string()).expect("rewrite library");
+
+    let endpoint = fake.endpoint();
+    sandbox.stdout_of(&read_args(
+        "sized",
+        &fake,
+        &["--endpoint", &endpoint, "--sentences", "1"],
+    ));
+
+    let text = std::fs::read_to_string(sandbox.library_path()).expect("library");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let counts = json["books"][0]["sentence_counts"]
+        .as_array()
+        .expect("read filled the counts in");
+    assert_eq!(counts.len(), 2, "one count per chapter: {counts:?}");
+    assert!(
+        counts.iter().all(|count| count.as_u64().unwrap_or(0) > 0),
+        "both chapters were counted: {counts:?}"
+    );
+}

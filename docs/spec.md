@@ -86,6 +86,14 @@ on the tagged tree.
   changes no exit code —
   `tests/cli_read.rs::a_piped_read_stays_plain_and_quiet_is_accepted`,
   `src/ui.rs::tests::quiet_wins_over_a_terminal`
+- AC-18: `ls` reports a percentage taken from the per-chapter sentence counts stored at
+  `add`, so a position inside a chapter is exact; an index written before those counts
+  existed still lists at chapter granularity, and the first `read` of that book fills the
+  counts in —
+  `tests/cli_ls.rs::ls_reports_a_percentage_inside_the_chapter_the_reader_is_in`,
+  `tests/cli_ls.rs::ls_falls_back_to_chapter_granularity_for_an_old_record`,
+  `tests/cli_read.rs::read_fills_in_sentence_counts_for_a_library_added_before_them`,
+  `src/store.rs::tests::a_percentage_lands_inside_the_chapter_the_reader_is_in`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -97,7 +105,8 @@ two binaries and asserts the code.
 New files only, all under XDG paths; nothing outside them is touched.
 
 - `$XDG_DATA_HOME/libretto/library.json` — `version`, `books[]` (`id`, `title`, `author`,
-  `source_path`, `content_hash`, `chapter_count`, `added_at`), `progress{}` per book
+  `source_path`, `content_hash`, `chapter_count`, `sentence_counts`, `added_at`),
+  `progress{}` per book
   (`chapter_index`, `sentence_index`, `updated_at`), `last_read`. File `0600`, directory
   `0700`, written through temp + rename, capped at 8 MiB before parsing.
 - `$XDG_CACHE_HOME/libretto/audio/<shard>/<key>.mp3` — key is blake3 of
