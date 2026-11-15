@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0](https://github.com/dandrok/libretto/compare/v1.3.0...v1.4.0) - 2026-11-15
+
+### Added
+
+- *(ls)* say how much listening is left
+
 ## [1.3.0](https://github.com/dandrok/libretto/compare/v1.2.2...v1.3.0) - 2026-11-15
 
 ### Added
