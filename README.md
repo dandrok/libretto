@@ -123,8 +123,10 @@ Flags that matter while listening:
 
 On a terminal `read` draws one line on stderr: a wordmark once, then a bar with a
 percentage, then a slow breath (`◡ ∘ ⊙ ◎ ⊙ ∘`) that moves while a sentence is
-playing. stdout stays the plain text, so a pipe, a log or a CI job gets no escape
-codes at all.
+playing. The bar is bracketed and twenty cells wide, filled to the book's own
+percentage, so `3%` and `60%` are the same distance apart on the screen as they
+are in the book. stdout stays the plain text, so a pipe, a log or a CI job gets no
+escape codes at all.
 
 The keyboard belongs to the player, not to libretto: space pauses and the arrow keys
 seek, because mpv is the one holding the terminal for the length of a sentence. Your
@@ -138,7 +140,8 @@ colour alone and keeps the bar.
 `libretto follow` is `read` with the text visible: the sentence before in dim, the sentence
 being spoken wrapped to the width with one word underlined, the next one dim below it, and
 the usual bar underneath. The rows are redrawn in place rather than on a separate screen, so
-your scrollback still holds the book after you stop.
+your scrollback still holds the book after you stop. A sentence needing more than four rows
+scrolls inside that window instead of pushing the terminal around.
 
 ```
 $ libretto follow grok --chapter 9
@@ -165,6 +168,13 @@ never asks for timings at all, which is why it is still one request per sentence
 `--width N` (else `$COLUMNS`, else 80) decides where the text wraps. Piped, or with
 `--quiet`, `follow` is byte-for-byte `read`.
 
+`--sync-offset MS` shifts the underline in time: positive makes it lag the voice, negative
+makes it lead. It exists because the last part of the error is the audio stack's, not the
+engine's — the player reports where the decoder is, and the sound arrives a little later. If
+the underline runs ahead of the voice on your machine, try `-80`; if it trails, `80`. It is a
+property of the machine, so put the number that fits in `sync_offset` in the config file and
+stop thinking about it.
+
 ## How it works
 
 1. The EPUB is unpacked and its chapters come out in spine order. Running heads (the
@@ -190,6 +200,7 @@ voice = "af_heart"
 speed = 1.25
 prefetch = 5
 player = "mpv"
+sync_offset = -80          # read-along only; see "Following along"
 ```
 
 ## Exit codes

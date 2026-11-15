@@ -103,6 +103,10 @@ on the tagged tree.
   `tests/cli_ls.rs::ls_omits_the_estimate_for_an_index_written_before_the_counts`,
   `src/store.rs::tests::time_left_shrinks_as_the_reader_moves`,
   `src/estimate.rs::tests::a_sentence_takes_its_characters_at_the_measured_rate`
+- AC-23: the read-along block never grows past the window it is given — the current sentence
+  shows at most four of its rows, scrolling so the word being spoken is always one of them, and
+  the neighbouring sentences stay one row each —
+  `src/follow.rs::tests::a_sentence_longer_than_the_window_scrolls_with_the_voice`
 - AC-20: `follow` is a presentation of `read`: on a terminal it draws the sentence being spoken
   wrapped to the width with the word being spoken underlined, redrawing in place, and on a
   pipe or under `--quiet` it emits exactly what `read` emits — same words, no escape

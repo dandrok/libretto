@@ -65,11 +65,11 @@ fn run() -> Result<(), AppError> {
         }
         Some(Command::Rm { id }) => remove(&store, &id),
         Some(Command::Read(args)) => {
-            let (request, overrides) = split(args);
+            let (request, overrides) = split(args, cli.sync_offset);
             read(&store, request, overrides, cli.quiet, false, cli.width)
         }
         Some(Command::Follow(args)) => {
-            let (request, overrides) = split(args);
+            let (request, overrides) = split(args, cli.sync_offset);
             read(&store, request, overrides, cli.quiet, true, cli.width)
         }
         Some(Command::Doctor { endpoint, player }) => check(Overrides {
@@ -259,7 +259,7 @@ fn remove(store: &Store, id: &str) -> Result<(), AppError> {
 
 /// One argument block, two verbs: `read` and `follow` share everything except how the
 /// sentence reaches the screen.
-fn split(args: BookArgs) -> (ReadRequest, Overrides) {
+fn split(args: BookArgs, sync_offset: Option<i64>) -> (ReadRequest, Overrides) {
     (
         ReadRequest {
             id: args.id,
@@ -275,6 +275,7 @@ fn split(args: BookArgs) -> (ReadRequest, Overrides) {
             model: args.model,
             player: args.player,
             prefetch: args.prefetch,
+            sync_offset,
         },
     )
 }
@@ -301,6 +302,7 @@ fn read(
 
     let ui = Ui::with_width(quiet, if following { width } else { None });
     let settings = Settings::resolve(&config::load()?, overrides);
+    ui.set_sync_offset(settings.sync_offset);
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
     let player = Mpv::new(settings.player.clone());
@@ -364,7 +366,11 @@ fn read(
         model: settings.model.clone(),
     };
 
+    // On a terminal the live line carries this and keeps it current; repeating it in the
+    // opening line is the same number twice within one screen. A pipe never sees the live
+    // line, so there it stays.
     let left = chars_left_in_book(&record, chapter_index, start, &sentences)
+        .filter(|_| !ui.interactive())
         .map(|chars| {
             format!(
                 " · ~{} left",
@@ -424,12 +430,31 @@ fn read(
     let mut save_failure: Option<StoreError> = None;
 
     let speaking = ui::Speaking::new(&player, &ui);
+    // The live line speaks the book's language: the same percentage `ls` prints, the
+    // chapters as a shape, and how much listening is left.
+    let book_percent = |chapter: usize, sentence: usize| -> u8 {
+        let progress = Progress {
+            chapter_index: chapter,
+            sentence_index: sentence,
+            updated_at: 0,
+        };
+        record.sentence_percent(progress).unwrap_or_else(|| {
+            let chapters = record.chapter_count.max(1);
+            ((chapter.saturating_mul(100) / chapters).min(100)) as u8
+        })
+    };
+    let left = |chapter: usize, sentence: usize| -> Option<u64> {
+        chars_left_in_book(&record, chapter, sentence, &sentences)
+            .map(|chars| estimate::seconds(chars, settings.speed))
+    };
     let base = ui::Status {
         title: short(&record.title, 28),
         chapter: chapter_index,
         chapters: book.chapters.len(),
         sentence: start,
         total: sentences.len(),
+        percent: book_percent(chapter_index, start),
+        left: left(chapter_index, start),
         voice: settings.voice.clone(),
         speed: settings.speed,
     };
@@ -456,6 +481,8 @@ fn read(
             position.updated_at = store::now_seconds();
             let mut snapshot = base.clone();
             snapshot.sentence = next;
+            snapshot.percent = book_percent(chapter_index, next);
+            snapshot.left = left(chapter_index, next);
             ui.note(snapshot);
             library.progress.insert(record.id.clone(), position);
             library.last_read = Some(record.id.clone());

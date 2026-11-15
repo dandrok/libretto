@@ -17,6 +17,9 @@ pub const DEFAULT_VOICE: &str = "af_heart";
 pub const DEFAULT_SPEED: f32 = 1.0;
 pub const DEFAULT_PREFETCH: usize = 5;
 pub const DEFAULT_PLAYER: &str = "mpv";
+/// No shift by default: how far the player's clock leads the audible output is a property
+/// of the audio stack, not of the book.
+pub const DEFAULT_SYNC_OFFSET: i64 = 0;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -44,6 +47,10 @@ pub struct Config {
     pub speed: Option<f32>,
     pub prefetch: Option<usize>,
     pub player: Option<String>,
+    /// Milliseconds to shift the read-along underline by; positive lags the voice. It belongs
+    /// in the file rather than on the command line because it is a property of the machine's
+    /// audio stack — found once, then never thought about again.
+    pub sync_offset: Option<i64>,
 }
 
 /// What a run actually uses: file values, then flags, then defaults.
@@ -55,6 +62,7 @@ pub struct Settings {
     pub speed: f32,
     pub prefetch: usize,
     pub player: String,
+    pub sync_offset: i64,
 }
 
 impl Settings {
@@ -89,6 +97,12 @@ impl Settings {
                 .player
                 .or_else(|| config.player.clone())
                 .unwrap_or_else(|| DEFAULT_PLAYER.to_string()),
+            sync_offset: overrides
+                .sync_offset
+                .or(config.sync_offset)
+                .unwrap_or(DEFAULT_SYNC_OFFSET)
+                // A shift of seconds is not a sync correction any more, it is another word.
+                .clamp(-5_000, 5_000),
         }
     }
 }
@@ -103,6 +117,10 @@ pub struct Overrides {
     pub speed: Option<f32>,
     pub prefetch: Option<usize>,
     pub player: Option<String>,
+    /// Milliseconds to shift the read-along underline by; positive lags the voice. It belongs
+    /// in the file rather than on the command line because it is a property of the machine's
+    /// audio stack — found once, then never thought about again.
+    pub sync_offset: Option<i64>,
 }
 
 pub fn config_path() -> Result<PathBuf, ConfigError> {
@@ -206,5 +224,43 @@ mod tests {
             );
             assert_eq!(settings.speed, DEFAULT_SPEED);
         }
+    }
+    #[test]
+    fn the_sync_offset_can_come_from_the_machine_config_and_a_flag_wins() {
+        let file = Config {
+            sync_offset: Some(-80),
+            ..Config::default()
+        };
+        assert_eq!(
+            Settings::resolve(&file, Overrides::default()).sync_offset,
+            -80,
+            "found once on this machine, kept in the file"
+        );
+        let flag = Overrides {
+            sync_offset: Some(120),
+            ..Overrides::default()
+        };
+        assert_eq!(
+            Settings::resolve(&file, flag).sync_offset,
+            120,
+            "a flag is this run's opinion, not the machine's"
+        );
+        assert_eq!(
+            Settings::resolve(&Config::default(), Overrides::default()).sync_offset,
+            0,
+            "and nothing at all is no shift"
+        );
+    }
+
+    #[test]
+    fn an_absurd_sync_offset_is_clamped_rather_than_obeyed() {
+        let file = Config {
+            sync_offset: Some(-99_000),
+            ..Config::default()
+        };
+        assert_eq!(
+            Settings::resolve(&file, Overrides::default()).sync_offset,
+            -5_000
+        );
     }
 }

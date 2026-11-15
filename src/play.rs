@@ -45,10 +45,11 @@ pub struct Position {
     pub paused: bool,
 }
 
-/// How often the player is asked where it is. A word lasts 150–400 ms, so four samples
-/// inside the shortest one is enough and costs two tiny round trips.
+/// How often the player is asked where it is. A word lasts 150–400 ms; sampling four times
+/// inside the shortest one keeps the quantisation well under a syllable, and two local reads
+/// cost nothing worth counting.
 #[cfg(unix)]
-const POLL: Duration = Duration::from_millis(60);
+const POLL: Duration = Duration::from_millis(20);
 
 /// Anything that can play one file to completion.
 pub trait Player {

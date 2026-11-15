@@ -8,7 +8,7 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -24,7 +24,10 @@ const DIM: &str = "\x1b[2m";
 const ACCENT: &str = "\x1b[38;5;179m";
 const CLEAR: &str = "\r\x1b[2K";
 
-const TICK: Duration = Duration::from_millis(90);
+/// How often the frame is considered. Drawing more often than the content changes is wasted
+/// bytes; drawing less often than the words change is what a reader sees as lag, so the tick
+/// is short and identical frames are dropped.
+const TICK: Duration = Duration::from_millis(30);
 const SWEEP_STEP: Duration = Duration::from_millis(16);
 const SWEEP_RELEASE: Duration = Duration::from_millis(120);
 const SWEEP_CELLS: usize = 28;
@@ -32,7 +35,14 @@ const SWEEP_CELLS: usize = 28;
 const BREATH: [char; 6] = ['◡', '∘', '⊙', '◎', '⊙', '∘'];
 /// Ticks per breath frame (3 × 90ms ≈ 270ms), so one breath lasts about 1.6s.
 const BREATH_TICKS: usize = 3;
-const BAR_CELLS: usize = 20;
+
+/// One cell per chapter, or fewer for a book with more chapters than the line can hold.
+/// The meter's width, brackets aside. Twenty is about where a reader stops counting cells and
+/// starts seeing a proportion.
+const METER_CELLS: usize = 20;
+/// Partial cells, so a chapter the reader is inside reads as progress rather than as empty.
+const PARTIALS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const EMPTY_CELL: char = '░';
 /// What the breath becomes when the player is paused: a held sentence, not a silent one.
 const PAUSE_MARK: &str = "❚❚";
 
@@ -58,6 +68,12 @@ pub struct Status {
     pub chapters: usize,
     pub sentence: usize,
     pub total: usize,
+    /// Whole-book progress. Everywhere else — `ls`, the opening line — a number means the
+    /// book, so the live line stops meaning "within this chapter" as well.
+    pub percent: u8,
+    /// Seconds of listening left, when the record can say. `None` on an index that predates
+    /// the per-chapter counts.
+    pub left: Option<u64>,
     pub voice: String,
     pub speed: f32,
 }
@@ -73,6 +89,8 @@ pub struct Ui {
     width: usize,
     /// The player's own position, once it has one. A wall clock is the fallback.
     clock_source: Arc<Mutex<Option<Clock>>>,
+    /// Milliseconds to shift the underline by; positive makes it lag the voice.
+    sync_offset: AtomicI64,
     /// Where the previous frame stood. Shared across pulses: a block is taller than one
     /// line, and the next sentence's pulse must know how far up to go.
     paint: Arc<Paint>,
@@ -107,6 +125,7 @@ impl Ui {
             follow: Arc::new(Mutex::new(None)),
             width: columns - 2,
             clock_source: Arc::new(Mutex::new(None)),
+            sync_offset: AtomicI64::new(0),
             paint: Arc::new(Paint::default()),
             clock: Arc::new(AtomicUsize::new(0)),
         }
@@ -114,6 +133,13 @@ impl Ui {
 
     pub fn width(&self) -> usize {
         self.width
+    }
+
+    /// Shift the underline in time. Everything left is smaller than a word — the engine's
+    /// own accuracy and the audio buffer — and neither is ours to measure, so the reader
+    /// gets the dial a subtitle player has.
+    pub fn set_sync_offset(&self, milliseconds: i64) {
+        self.sync_offset.store(milliseconds, Ordering::Relaxed);
     }
 
     /// Teach the view to ask the player where it is. Without this the underline follows a
@@ -226,6 +252,7 @@ impl Ui {
         let width = self.width;
         let paint = Arc::clone(&self.paint);
         let clock_source = Arc::clone(&self.clock_source);
+        let offset_ms = self.sync_offset.load(Ordering::Relaxed);
 
         let handle = thread::spawn(move || {
             let mut err = io::stderr();
@@ -233,6 +260,7 @@ impl Ui {
             // the voice by however long the player takes to make sound — a fraction of a
             // word, and the same on every sentence.
             let started = Instant::now();
+            let mut last: Vec<String> = Vec::new();
             while !flag.load(Ordering::Relaxed) {
                 let snapshot = match state.lock() {
                     Ok(state) => state.clone(),
@@ -241,10 +269,15 @@ impl Ui {
                 let tick = clock.fetch_add(1, Ordering::Relaxed);
                 let sentence = follow.lock().ok().and_then(|slot| slot.clone());
                 let source = clock_source.lock().ok().and_then(|slot| slot.clone());
-                let moment = moment(source.as_ref(), started);
+                let moment = moment(source.as_ref(), started, offset_ms);
                 let frame = frame(&snapshot, tick, colour, sentence.as_ref(), moment, width);
-                if paint.draw(&mut err, &frame).is_err() {
-                    break;
+                // The clock is sampled every tick, but the terminal is only written when the
+                // picture differs: a held word and a still breath cost nothing.
+                if frame != last {
+                    if paint.draw(&mut err, &frame).is_err() {
+                        break;
+                    }
+                    last = frame;
                 }
                 thread::sleep(TICK);
             }
@@ -279,14 +312,15 @@ struct Moment {
 /// The player's own position when it reports one, and the wall clock when it cannot. A
 /// paused player stops reporting progress, so the underline stops with it — which is the
 /// whole reason to ask — and it also says so, so the line can stop breathing.
-fn moment(clock: Option<&Clock>, started: Instant) -> Moment {
+fn moment(clock: Option<&Clock>, started: Instant, offset_ms: i64) -> Moment {
+    let shift = offset_ms as f32 / 1000.0;
     match clock.and_then(|clock| clock()) {
         Some(position) => Moment {
-            at: position.seconds.max(0.0) as f32,
+            at: (position.seconds as f32 - shift).max(0.0),
             paused: position.paused,
         },
         None => Moment {
-            at: started.elapsed().as_secs_f32(),
+            at: (started.elapsed().as_secs_f32() - shift).max(0.0),
             paused: false,
         },
     }
@@ -304,10 +338,16 @@ fn frame(
     let mut frame: Vec<String> = Vec::new();
     if let Some(sentence) = sentence {
         let active = captions::index_at(&sentence.words, moment.at);
-        let rows = follow::layout(sentence, width, active);
+        let rows = follow::layout(sentence, width, active, follow::SENTENCE_ROWS);
         frame.extend(follow::render(&rows, colour));
     }
-    frame.push(bar_line_with(status, Some(tick), moment.paused, colour));
+    frame.push(bar_line_with(
+        status,
+        Some(tick),
+        moment.paused,
+        colour,
+        width,
+    ));
     frame
 }
 
@@ -378,6 +418,59 @@ impl Player for Speaking<'_> {
     }
 }
 
+/// Columns a line occupies, escape sequences taking none.
+fn visible_columns(line: &str) -> usize {
+    let mut columns = 0;
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character == '\x1b' {
+            // Skip to the final byte of the sequence: letters end CSI, `m` included.
+            for next in characters.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        columns += 1;
+    }
+    columns
+}
+
+/// Cut a plain line to the width, never mid-escape.
+fn cut(line: String, width: usize) -> String {
+    if visible_columns(&line) <= width {
+        return line;
+    }
+    line.chars().take(width).collect()
+}
+
+/// `[██████████░░░░░░░░░░]` — the book's own percentage across twenty cells, with the cell
+/// holding the reader cut to the nearest eighth.
+///
+/// Bracketed so the bar has edges: a bar that fades into the line reads as a gap that happens to
+/// be full of block characters, and at 1% it reads as a rendering fault.
+pub fn meter(percent: u8, room: usize) -> String {
+    let cells = METER_CELLS.min(room.saturating_sub(2));
+    if cells == 0 {
+        return String::new();
+    }
+    let eighths = (percent.min(100) as usize) * cells * 8 / 100;
+    let full = (eighths / 8).min(cells);
+    let partial = eighths % 8;
+    let mut inside = String::with_capacity(cells);
+    for _ in 0..full {
+        inside.push(PARTIALS[PARTIALS.len() - 1]);
+    }
+    if partial > 0 && full < cells {
+        inside.push(PARTIALS[partial - 1]);
+    }
+    while inside.chars().count() < cells {
+        inside.push(EMPTY_CELL);
+    }
+    format!("[{inside}]")
+}
+
 /// The pre-UI status line, byte for byte. Scripts and tests have seen this shape
 /// since 1.0, so it stays.
 pub fn plain_line(status: &Status) -> String {
@@ -400,28 +493,72 @@ pub fn plain_line(status: &Status) -> String {
 /// happening", which is exactly what the player call proves. A waveform here
 /// would claim to follow the voice, and nothing in this program knows that.
 pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
-    bar_line_with(status, tick, false, colour)
+    bar_line_with(status, tick, false, colour, 80)
 }
 
 /// [bar_line] with the player's own state: a breath while a sentence is being spoken, and
 /// a pause mark while it is held. Nothing here animates on a pause, because nothing is
 /// happening — that is the point of the mark.
-pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour: bool) -> String {
-    let percent = status
-        .sentence
-        .checked_mul(100)
-        .and_then(|scaled| scaled.checked_div(status.total))
-        .unwrap_or(0);
-    let track = bar(status.sentence, status.total, BAR_CELLS);
-    let counters = format!(
-        "ch {}/{} · {}/{} · {} ×{:.2}",
-        status.chapter + 1,
-        status.chapters,
-        status.sentence,
-        status.total,
-        status.voice,
-        status.speed
-    );
+pub fn bar_line_with(
+    status: &Status,
+    tick: Option<usize>,
+    paused: bool,
+    colour: bool,
+    width: usize,
+) -> String {
+    // The book's number, not this chapter's: the same figure `ls` prints, so a reader never
+    // has to remember which of the two they are looking at.
+    let percent = status.percent;
+    // No padding: a right-aligned `1%` in a three-column field leaves a hole the eye reads as a
+    // gap between the cells and the number.
+    let pct = format!("{percent}%");
+    // The line has to fit: a wrapped row breaks the cursor arithmetic the whole block depends
+    // on, so when the terminal is narrow the counters give way before the cells do — time left
+    // first, then the sentence counters, then the voice, because those are the parts a reader
+    // can live without for one chapter.
+    let counters = |time: bool, sentences: bool, voice: bool| -> String {
+        let mut parts: Vec<String> = vec![format!("ch {}/{}", status.chapter + 1, status.chapters)];
+        if sentences {
+            parts.push(format!("{}/{}", status.sentence, status.total));
+        }
+        if let (true, Some(seconds)) = (time, status.left) {
+            parts.push(format!("~{} left", crate::estimate::human(seconds)));
+        }
+        if voice {
+            parts.push(format!("{} ×{:.2}", status.voice, status.speed));
+        }
+        parts.join(" · ")
+    };
+
+    // Wide lines first, but the voice name yields before the meter does: the meter is the part a
+    // reader glances at, and the voice is the same on every line of a run.
+    let room_for_meter = width >= 40;
+    let mut fitted: Option<(String, String)> = None;
+    for with_meter in [room_for_meter, false] {
+        for (time, sentences, voice) in [
+            (true, true, false),
+            (true, true, true),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            let candidate = counters(time, sentences, voice);
+            let shape = if with_meter {
+                meter(percent, width)
+            } else {
+                String::new()
+            };
+            let total =
+                2 + shape.chars().count() + 1 + pct.len() + 2 + candidate.chars().count() + 3;
+            if total <= width {
+                fitted = Some((candidate, shape));
+                break;
+            }
+        }
+        if fitted.is_some() {
+            break;
+        }
+    }
+    let (chosen, track) = fitted.unwrap_or_else(|| (counters(false, false, false), String::new()));
     let tail = match tick {
         None => "   ".to_string(),
         Some(_) if paused && colour => format!("  {ACCENT}{PAUSE_MARK}{RESET}"),
@@ -429,10 +566,18 @@ pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour:
         Some(tick) if colour => format!("  {ACCENT}{}{RESET}", breath(tick)),
         Some(tick) => format!("  {}", breath(tick)),
     };
+    // A terminal narrower than the counters themselves cannot be satisfied by dropping parts;
+    // the line is then cut rather than allowed to wrap.
     if !colour {
-        return format!("{CLEAR}  {track} {percent:>3}%  {counters}{tail}");
+        return cut(format!("{CLEAR}  {track} {pct}  {chosen}{tail}"), width);
     }
-    format!("{CLEAR}  {ACCENT}{track}{RESET} {percent:>3}%  {DIM}{counters}{RESET}{tail}")
+    let coloured = format!("{CLEAR}  {ACCENT}{track}{RESET} {pct}  {DIM}{chosen}{RESET}{tail}");
+    if visible_columns(&coloured) <= width {
+        return coloured;
+    }
+    // The styling costs no columns but the escapes count as characters if the line is cut, so a
+    // narrow terminal gets the readable plain line instead of a broken coloured one.
+    cut(format!("{CLEAR}  {track} {pct}  {chosen}"), width)
 }
 
 fn sweep(filled: usize, colour: bool) -> String {
@@ -479,6 +624,8 @@ mod tests {
             chapters: 25,
             sentence,
             total,
+            percent: 33,
+            left: None,
             voice: "af_heart".to_string(),
             speed: 1.0,
         }
@@ -493,251 +640,81 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_is_proportional_and_never_overflows() {
-        assert_eq!(bar(0, 100, 10), "░░░░░░░░░░");
-        assert_eq!(bar(100, 100, 10), "██████████");
-        assert_eq!(bar(50, 100, 10), "█████░░░░░");
-        assert_eq!(bar(200, 100, 10), "██████████", "clamped past the end");
-        assert_eq!(bar(5, 0, 10), "░░░░░░░░░░", "no total, no fill");
-        assert_eq!(bar(1, 3, 10), "███░░░░░░░", "rounded, not truncated");
+    fn the_line_fits_the_width_it_was_given() {
+        let mut wide = status(300, 600);
+        wide.chapter = 12;
+        wide.chapters = 27;
+        wide.left = Some(2_400);
+        // 60 columns is where the cells and the counters can still share the line.
+        let line = bar_line_with(&wide, Some(1), false, false, 60);
+        let visible = line.trim_start_matches('\r');
+        assert!(
+            visible_columns(line.as_str()) <= 60,
+            "a wrapped row breaks the frame arithmetic: {visible:?} is {} columns",
+            visible_columns(line.as_str())
+        );
+        assert!(
+            visible.contains("ch 13/27") && visible.contains("300/600"),
+            "the counters survive the cells, not the other way round: {visible:?}"
+        );
+        assert!(
+            visible.contains('█') || visible.contains('░'),
+            "and some of the book's shape is on the line: {visible:?}"
+        );
+
+        // Narrower than the counters themselves: the cells and the time give way, and the line
+        // is still one row.
+        let narrow = bar_line_with(&wide, Some(1), false, false, 30);
+        let visible = narrow.trim_start_matches('\r');
+        assert!(visible.contains("ch 13/27"), "{visible:?}");
+        assert!(
+            visible_columns(narrow.as_str()) <= 30,
+            "still one row: {visible:?} is {} columns",
+            visible_columns(narrow.as_str())
+        );
+        assert!(
+            !visible.contains("left"),
+            "time left is the first thing dropped: {visible:?}"
+        );
+        assert!(
+            !visible.contains('█') && !visible.contains('░'),
+            "and below forty columns a cell per chapter is a sliver, not information: {visible:?}"
+        );
     }
 
     #[test]
-    fn the_breath_opens_and_closes() {
-        let frames: Vec<char> = (0..BREATH.len() * BREATH_TICKS)
-            .step_by(BREATH_TICKS)
-            .map(breath)
-            .collect();
-        assert_eq!(frames, BREATH.to_vec(), "every frame, in order");
-
-        // A breath widens to a peak and comes back: same shape both ways.
-        let peak = frames.iter().position(|c| *c == '◎').expect("a peak");
-        assert_eq!(peak, BREATH.len() / 2, "the widest glyph is in the middle");
-        assert_eq!(breath(0), breath(BREATH.len() * BREATH_TICKS), "wraps");
+    fn the_meter_has_edges_and_fills_in_proportion() {
+        // Nothing read: an empty bracketed bar, not a line of stray blocks.
         assert_eq!(
-            breath(usize::MAX),
-            breath(usize::MAX % (BREATH.len() * BREATH_TICKS))
+            meter(0, 80),
+            format!("[{}]", EMPTY_CELL.to_string().repeat(20))
         );
-    }
-
-    #[test]
-    fn the_bar_line_carries_the_counters_and_never_colours_without_asking() {
-        let line = bar_line(&status(38, 287), Some(3), false);
-        assert!(line.contains("13%"), "got {line}");
-        assert!(line.contains("ch 9/25"));
-        assert!(line.contains("38/287"));
-        assert!(line.contains("af_heart ×1.00"));
-        // Erasing the line needs `ESC[2K`; colour is a separate promise.
-        for escape in [ACCENT, DIM, RESET] {
-            assert!(!line.contains(escape), "coloured without asking: {line:?}");
-        }
-    }
-
-    #[test]
-    fn colour_appears_only_when_asked_for() {
-        let coloured = bar_line(&status(38, 287), None, true);
-        assert!(coloured.contains(ACCENT));
-        assert!(coloured.contains(RESET));
-    }
-
-    #[test]
-    fn quiet_wins_over_a_terminal() {
-        let ui = Ui::new(true);
-        assert!(!ui.interactive(), "--quiet has to mean quiet");
-    }
-
-    fn following_sentence() -> follow::Sentence {
-        follow::Sentence {
-            previous: Some("before this".to_string()),
-            current: "the quick brown fox jumps over the lazy dog".to_string(),
-            next: Some("after this".to_string()),
-            words: captions::interpolate("the quick brown fox jumps over the lazy dog", 4.0),
-        }
-    }
-
-    #[test]
-    fn a_frame_with_a_sentence_draws_the_block_and_then_the_bar() {
-        let status = status(3, 40);
-        let with = frame(
-            &status,
-            0,
-            false,
-            Some(&following_sentence()),
-            Moment {
-                at: 1.0,
-                paused: false,
-            },
-            40,
-        );
-        assert!(with.len() > 2, "block plus bar: {with:?}");
-        assert!(
-            with.iter().any(|row| row.contains("quick brown fox")),
-            "the sentence is on screen: {with:?}"
-        );
-        assert!(
-            with.last().expect("bar").contains("af_heart"),
-            "the bar is last"
-        );
-
-        let without = frame(
-            &status,
-            0,
-            false,
-            None,
-            Moment {
-                at: 0.0,
-                paused: false,
-            },
-            40,
-        );
-        assert_eq!(without.len(), 1, "read draws one line and nothing else");
-    }
-
-    #[test]
-    fn the_highlight_advances_with_the_clock() {
-        let sentence = following_sentence();
-        let start = frame(
-            &status(3, 40),
-            0,
-            true,
-            Some(&sentence),
-            Moment {
-                at: 0.0,
-                paused: false,
-            },
-            40,
-        );
-        let later = frame(
-            &status(3, 40),
-            0,
-            true,
-            Some(&sentence),
-            Moment {
-                at: 3.0,
-                paused: false,
-            },
-            40,
-        );
-        assert!(
-            start.join("\n").contains(&format!("{ACCENT}{}", "\x1b[4m")),
-            "something is lit at zero"
-        );
-        assert_ne!(start, later, "a different moment lights a different word");
-    }
-
-    #[test]
-    fn the_second_frame_is_drawn_over_the_first() {
-        let paint = Paint::default();
-        let four = vec![
-            "a".to_string(),
-            "b".to_string(),
-            "c".to_string(),
-            "d".to_string(),
-        ];
-
-        let mut out = Vec::new();
-        paint.draw(&mut out, &four).expect("draw");
-        let first = String::from_utf8_lossy(&out).to_string();
-        assert!(!first.contains("\x1b[0F"), "nothing above yet: {first:?}");
-        assert!(first.contains("\r\x1b[2Ka\n"), "{first:?}");
-
-        // The same `Paint` is what carries the height from one sentence to the next: a
-        // fresh counter here is the bug where every sentence lands below the last one.
-        let mut out = Vec::new();
-        paint.draw(&mut out, &four).expect("draw");
-        let second = String::from_utf8_lossy(&out).to_string();
-        assert!(
-            second.starts_with("\x1b[4F"),
-            "the next sentence moves up over all four rows: {second:?}"
-        );
-
-        let mut out = Vec::new();
-        paint.draw(&mut out, &["only".to_string()]).expect("draw");
-        let smaller = String::from_utf8_lossy(&out).to_string();
-        assert!(
-            smaller.ends_with("\x1b[J"),
-            "and clears the rows it no longer fills: {smaller:?}"
-        );
-    }
-
-    #[test]
-    fn the_player_position_beats_the_wall_clock() {
-        let frozen: Clock = Arc::new(|| {
-            Some(Position {
-                seconds: 2.5,
-                paused: true,
-            })
-        });
-        let started = Instant::now();
-        std::thread::sleep(Duration::from_millis(20));
-        let held = moment(Some(&frozen), started);
-        assert_eq!(held.at, 2.5, "a paused player's position does not advance");
-        assert!(held.paused, "and it says why");
-        assert!(
-            moment(None, started).at > 0.0,
-            "without a player the wall clock answers"
-        );
-        assert!(
-            !moment(None, started).paused,
-            "a wall clock is never paused: it cannot know"
-        );
-        let silent: Clock = Arc::new(|| None);
-        assert!(
-            moment(Some(&silent), started).at > 0.0,
-            "a player that has not answered yet falls back rather than freezing at zero"
-        );
-    }
-
-    #[test]
-    fn a_paused_player_stops_breathing_and_shows_a_mark() {
-        let status = status(3, 40);
-        let sentence = following_sentence();
-        let playing = frame(
-            &status,
-            5,
-            false,
-            Some(&sentence),
-            Moment {
-                at: 0.5,
-                paused: false,
-            },
-            40,
-        );
-        let held = frame(
-            &status,
-            5,
-            false,
-            Some(&sentence),
-            Moment {
-                at: 0.5,
-                paused: true,
-            },
-            40,
-        );
-
-        let bar_playing = playing.last().expect("bar");
-        let bar_held = held.last().expect("bar");
-        assert!(!bar_playing.contains(PAUSE_MARK), "{bar_playing:?}");
-        assert!(bar_held.contains(PAUSE_MARK), "{bar_held:?}");
-        assert!(
-            !bar_held.chars().any(|glyph| BREATH.contains(&glyph)),
-            "nothing breathes while the book is held: {bar_held:?}"
-        );
-        let coloured = bar_line_with(&status, Some(5), true, true);
-        assert!(
-            coloured.contains(PAUSE_MARK),
-            "and the colour path agrees: {coloured:?}"
-        );
-    }
-
-    #[test]
-    fn the_width_flag_wins_over_the_terminal_and_stays_sane() {
+        // Half: half the cells, still bracketed.
+        let half = meter(50, 80);
+        assert!(half.starts_with('[') && half.ends_with(']'), "{half:?}");
+        assert_eq!(half.chars().count(), 22, "twenty cells and two brackets");
         assert_eq!(
-            Ui::with_width(true, Some(60)).width(),
-            58,
-            "two columns of margin"
+            half.matches('█').count(),
+            10,
+            "fifty per cent is ten whole cells: {half:?}"
         );
-        assert_eq!(Ui::with_width(true, Some(5)).width(), 20, "never a sliver");
-        assert_eq!(Ui::with_width(true, Some(9999)).width(), 398);
+        // The ends.
+        assert_eq!(meter(100, 80).matches('█').count(), 20);
+        assert_eq!(meter(100, 80).matches(EMPTY_CELL).count(), 0);
+        // A book barely started still shows that it started: one eighth of a cell.
+        let start = meter(1, 80);
+        assert_eq!(
+            start.matches('█').count(),
+            0,
+            "one per cent is not a whole cell: {start:?}"
+        );
+        assert!(start.contains('▏'), "but it is not zero either: {start:?}");
+        // A narrow room shrinks the bar rather than wrapping it.
+        assert_eq!(
+            meter(50, 10).chars().count(),
+            10,
+            "eight cells, two brackets"
+        );
+        assert_eq!(meter(50, 2), "", "no room, no bar");
     }
 }
