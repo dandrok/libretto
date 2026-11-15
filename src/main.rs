@@ -426,12 +426,31 @@ fn read(
     let mut save_failure: Option<StoreError> = None;
 
     let speaking = ui::Speaking::new(&player, &ui);
+    // The live line speaks the book's language: the same percentage `ls` prints, the
+    // chapters as a shape, and how much listening is left.
+    let book_percent = |chapter: usize, sentence: usize| -> u8 {
+        let progress = Progress {
+            chapter_index: chapter,
+            sentence_index: sentence,
+            updated_at: 0,
+        };
+        record.sentence_percent(progress).unwrap_or_else(|| {
+            let chapters = record.chapter_count.max(1);
+            ((chapter.saturating_mul(100) / chapters).min(100)) as u8
+        })
+    };
+    let left = |chapter: usize, sentence: usize| -> Option<u64> {
+        chars_left_in_book(&record, chapter, sentence, &sentences)
+            .map(|chars| estimate::seconds(chars, settings.speed))
+    };
     let base = ui::Status {
         title: short(&record.title, 28),
         chapter: chapter_index,
         chapters: book.chapters.len(),
         sentence: start,
         total: sentences.len(),
+        percent: book_percent(chapter_index, start),
+        left: left(chapter_index, start),
         voice: settings.voice.clone(),
         speed: settings.speed,
     };
@@ -458,6 +477,8 @@ fn read(
             position.updated_at = store::now_seconds();
             let mut snapshot = base.clone();
             snapshot.sentence = next;
+            snapshot.percent = book_percent(chapter_index, next);
+            snapshot.left = left(chapter_index, next);
             ui.note(snapshot);
             library.progress.insert(record.id.clone(), position);
             library.last_read = Some(record.id.clone());

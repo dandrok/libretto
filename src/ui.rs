@@ -35,7 +35,11 @@ const SWEEP_CELLS: usize = 28;
 const BREATH: [char; 6] = ['◡', '∘', '⊙', '◎', '⊙', '∘'];
 /// Ticks per breath frame (3 × 90ms ≈ 270ms), so one breath lasts about 1.6s.
 const BREATH_TICKS: usize = 3;
-const BAR_CELLS: usize = 20;
+/// One cell per chapter, or fewer for a book with more chapters than the line can hold.
+const SPARK_CELLS: usize = 40;
+/// Partial cells, so a chapter the reader is inside reads as progress rather than as empty.
+const PARTIALS: [char; 8] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+const EMPTY_CELL: char = '░';
 /// What the breath becomes when the player is paused: a held sentence, not a silent one.
 const PAUSE_MARK: &str = "❚❚";
 
@@ -61,6 +65,12 @@ pub struct Status {
     pub chapters: usize,
     pub sentence: usize,
     pub total: usize,
+    /// Whole-book progress. Everywhere else — `ls`, the opening line — a number means the
+    /// book, so the live line stops meaning "within this chapter" as well.
+    pub percent: u8,
+    /// Seconds of listening left, when the record can say. `None` on an index that predates
+    /// the per-chapter counts.
+    pub left: Option<u64>,
     pub voice: String,
     pub speed: f32,
 }
@@ -399,6 +409,53 @@ impl Player for Speaking<'_> {
     }
 }
 
+/// A cell per chapter: filled for the chapters behind the reader, a partial cell for the one
+/// they are inside, faint for the rest. A plain bar says "12% of the way through"; this says
+/// "chapter 4 of 27, a third into it", which is the shape of the book the numbers describe.
+///
+/// A book with more chapters than the line has cells has them grouped — the boundary cell is
+/// then the group holding the reader, still partial for how far into the group they are.
+pub fn sparkline(status: &Status) -> String {
+    let chapters = status.chapters.max(1);
+    let cells = chapters.min(SPARK_CELLS);
+    let filled = if status.total == 0 {
+        0.0
+    } else {
+        (status.sentence as f32 / status.total as f32).clamp(0.0, 1.0)
+    };
+    let mut line = String::with_capacity(cells);
+    for cell in 0..cells {
+        // Which chapters this cell stands for, and how much of them is done.
+        let start = cell * chapters / cells;
+        let end = ((cell + 1) * chapters / cells).max(start + 1);
+        let done = if status.chapter >= end {
+            1.0
+        } else if status.chapter < start {
+            0.0
+        } else {
+            // The cell holding the reader: whole chapters behind them in this group, plus
+            // how far through the current chapter they are.
+            let behind = (status.chapter - start) as f32;
+            let span = (end - start) as f32;
+            ((behind + filled) / span).clamp(0.0, 1.0)
+        };
+        line.push(cell_glyph(done));
+    }
+    line
+}
+
+fn cell_glyph(done: f32) -> char {
+    if done <= 0.0 {
+        return EMPTY_CELL;
+    }
+    if done >= 1.0 {
+        return PARTIALS[PARTIALS.len() - 1];
+    }
+    // Nearest eighth, not the eighth below: half a chapter should read as half a cell.
+    let eighths = (done * PARTIALS.len() as f32).round() as usize;
+    PARTIALS[eighths.saturating_sub(1).min(PARTIALS.len() - 2)]
+}
+
 /// The pre-UI status line, byte for byte. Scripts and tests have seen this shape
 /// since 1.0, so it stays.
 pub fn plain_line(status: &Status) -> String {
@@ -428,21 +485,31 @@ pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
 /// a pause mark while it is held. Nothing here animates on a pause, because nothing is
 /// happening — that is the point of the mark.
 pub fn bar_line_with(status: &Status, tick: Option<usize>, paused: bool, colour: bool) -> String {
-    let percent = status
-        .sentence
-        .checked_mul(100)
-        .and_then(|scaled| scaled.checked_div(status.total))
-        .unwrap_or(0);
-    let track = bar(status.sentence, status.total, BAR_CELLS);
-    let counters = format!(
-        "ch {}/{} · {}/{} · {} ×{:.2}",
-        status.chapter + 1,
-        status.chapters,
-        status.sentence,
-        status.total,
-        status.voice,
-        status.speed
-    );
+    // The book's number, not this chapter's: the same figure `ls` prints, so a reader never
+    // has to remember which of the two they are looking at.
+    let percent = status.percent;
+    let track = sparkline(status);
+    let counters = match status.left {
+        Some(seconds) => format!(
+            "ch {}/{} · {}/{} · ~{} left · {} ×{:.2}",
+            status.chapter + 1,
+            status.chapters,
+            status.sentence,
+            status.total,
+            crate::estimate::human(seconds),
+            status.voice,
+            status.speed
+        ),
+        None => format!(
+            "ch {}/{} · {}/{} · {} ×{:.2}",
+            status.chapter + 1,
+            status.chapters,
+            status.sentence,
+            status.total,
+            status.voice,
+            status.speed
+        ),
+    };
     let tail = match tick {
         None => "   ".to_string(),
         Some(_) if paused && colour => format!("  {ACCENT}{PAUSE_MARK}{RESET}"),
@@ -500,6 +567,8 @@ mod tests {
             chapters: 25,
             sentence,
             total,
+            percent: 33,
+            left: None,
             voice: "af_heart".to_string(),
             speed: 1.0,
         }
@@ -510,6 +579,58 @@ mod tests {
         assert_eq!(
             plain_line(&status(38, 287)),
             "\r  Grokking Algorithms · ch 9/25 · 38/287 · af_heart ×1.00   "
+        );
+    }
+
+    #[test]
+    fn the_sparkline_shows_the_book_by_chapter_not_the_chapter_by_sentence() {
+        let mut one = status(0, 100);
+        one.chapter = 0;
+        one.chapters = 8;
+        assert_eq!(
+            sparkline(&one),
+            "░░░░░░░░",
+            "nothing read yet: every chapter ahead"
+        );
+
+        let mut half = status(50, 100);
+        half.chapter = 3;
+        half.chapters = 8;
+        let line = sparkline(&half);
+        assert_eq!(line.chars().count(), 8, "one cell per chapter: {line:?}");
+        assert!(
+            line.starts_with("███"),
+            "three whole chapters behind: {line:?}"
+        );
+        assert_eq!(
+            line.chars().nth(3),
+            Some('▌'),
+            "and half of the fourth: {line:?}"
+        );
+        assert!(line.ends_with("░░░░"), "four chapters ahead: {line:?}");
+
+        let mut last = status(100, 100);
+        last.chapter = 7;
+        last.chapters = 8;
+        assert_eq!(sparkline(&last), "████████");
+    }
+
+    #[test]
+    fn a_book_with_more_chapters_than_cells_keeps_the_boundary_honest() {
+        let mut huge = status(50, 100);
+        huge.chapter = 100;
+        huge.chapters = 400;
+        let line = sparkline(&huge);
+        assert_eq!(line.chars().count(), SPARK_CELLS, "grouped, not truncated");
+        let filled = line.chars().filter(|glyph| *glyph == '█').count();
+        assert_eq!(
+            filled, 10,
+            "a quarter of the book is a quarter of the cells: {line:?}"
+        );
+        assert_ne!(
+            line.chars().nth(10),
+            Some('░'),
+            "the cell holding the reader is partial: {line:?}"
         );
     }
 
@@ -542,8 +663,23 @@ mod tests {
     }
 
     #[test]
+    fn the_percentage_is_the_books_not_the_chapters() {
+        let mut early = status(0, 17);
+        early.chapter = 4;
+        early.percent = 11;
+        let line = bar_line(&early, None, false);
+        assert!(line.contains(" 11%"), "the book's figure: {line:?}");
+        assert!(
+            !line.contains("  0%"),
+            "not the chapter's zero-of-seventeen: {line:?}"
+        );
+    }
+
+    #[test]
     fn the_bar_line_carries_the_counters_and_never_colours_without_asking() {
-        let line = bar_line(&status(38, 287), Some(3), false);
+        let mut sample = status(38, 287);
+        sample.percent = 13;
+        let line = bar_line(&sample, Some(3), false);
         assert!(line.contains("13%"), "got {line}");
         assert!(line.contains("ch 9/25"));
         assert!(line.contains("38/287"));
