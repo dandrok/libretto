@@ -22,9 +22,9 @@ pub struct Cli {
     pub width: Option<usize>,
 
     /// Shift the underline by this many milliseconds: positive makes it lag the voice,
-    /// negative makes it lead. For an audio pipeline whose buffer is longer than the rest
-    /// of the error budget.
-    #[arg(long, global = true)]
+    /// negative makes it lead (`--sync-offset=-80`). For an audio pipeline whose buffer is
+    /// longer than the rest of the error budget.
+    #[arg(long, global = true, allow_hyphen_values = true, value_name = "MS")]
     pub sync_offset: Option<i64>,
 
     #[command(subcommand)]

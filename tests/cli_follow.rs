@@ -176,3 +176,34 @@ fn on_a_terminal_follow_draws_the_sentence_and_lights_a_word() {
     );
     assert!(raw.contains("\x1b[4m"), "a word is underlined: {raw:?}");
 }
+
+#[test]
+fn a_negative_sync_offset_is_a_value_not_a_flag() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book("sync.epub", Some("Sync Book"), &[("One", "One. Two.")]);
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    let endpoint = fake.endpoint();
+    for offset in ["-80", "80", "0"] {
+        let output = sandbox.run(&[
+            "follow",
+            "sync",
+            "--player",
+            "true",
+            "--endpoint",
+            &endpoint,
+            "--chapter",
+            "1",
+            "--sentences",
+            "1",
+            "--sync-offset",
+            offset,
+        ]);
+        assert!(
+            output.status.success(),
+            "{offset} was refused as a flag: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
