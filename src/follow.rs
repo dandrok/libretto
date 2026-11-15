@@ -34,12 +34,20 @@ pub struct Row {
     pub active: Option<(usize, usize)>,
 }
 
-/// Lay the block out. `active` is an index into the sentence's words; before speech
-/// starts and after it ends the caller passes the index `index_at` returns, which never
-/// leaves the sentence.
-pub fn layout(sentence: &Sentence, width: usize, active: Option<usize>) -> Vec<Row> {
+/// How many rows of the current sentence a view may show at once. A sentence that needs more
+/// scrolls inside this window rather than pushing the terminal around.
+pub const SENTENCE_ROWS: usize = 4;
+
+/// Lay the block out. `active` is an index into the sentence's words; before speech starts
+/// and after it ends the caller passes the index `index_at` returns, which never leaves the
+/// sentence.
+///
+/// `rows` is the window for the *current* sentence: when the text needs more, the rows shown
+/// are the ones ending with the word being spoken, so the highlight is never scrolled off.
+pub fn layout(sentence: &Sentence, width: usize, active: Option<usize>, rows: usize) -> Vec<Row> {
     let width = width.max(MIN_WIDTH);
-    let mut rows = Vec::new();
+    let rows = rows.max(1);
+    let mut block = Vec::new();
     // A blank neighbour is not a row: an empty one would push the current sentence down
     // a line for no reason.
     if let Some(previous) = sentence
@@ -47,30 +55,40 @@ pub fn layout(sentence: &Sentence, width: usize, active: Option<usize>) -> Vec<R
         .as_deref()
         .filter(|text| !text.trim().is_empty())
     {
-        rows.push(Row {
+        block.push(Row {
             text: shorten(previous, width),
             active: None,
         });
     }
     let (lines, spans) = wrap(&sentence.current, width);
     let lit = active.and_then(|index| spans.get(index).copied());
-    for (row, text) in lines.into_iter().enumerate() {
+    // Where the window starts: the row holding the word being spoken has to be inside it, so a
+    // sentence longer than the window scrolls down as the voice moves through it.
+    let first = match lit {
+        Some((row, _, _)) if lines.len() > rows => (row + 1).saturating_sub(rows),
+        _ => 0,
+    }
+    .min(lines.len().saturating_sub(rows));
+    for (row, text) in lines.iter().enumerate().skip(first).take(rows) {
         let active = lit
             .filter(|(at, _, _)| *at == row)
             .map(|(_, start, end)| (start, end));
-        rows.push(Row { text, active });
+        block.push(Row {
+            text: text.clone(),
+            active,
+        });
     }
     if let Some(next) = sentence
         .next
         .as_deref()
         .filter(|text| !text.trim().is_empty())
     {
-        rows.push(Row {
+        block.push(Row {
             text: shorten(next, width),
             active: None,
         });
     }
-    rows
+    block
 }
 
 /// Rows with their styling applied. Without colour the block is plain text, so a log
@@ -189,7 +207,7 @@ mod tests {
         let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
         let (_, spans) = wrap(text, 20);
         let sentence = sentence("", text, "");
-        let rows = layout(&sentence, 20, Some(7));
+        let rows = layout(&sentence, 20, Some(7), SENTENCE_ROWS);
         let expected_row = spans[7].0;
         for (index, row) in rows.iter().enumerate() {
             if index == expected_row {
@@ -204,7 +222,7 @@ mod tests {
     fn the_neighbours_get_one_row_each_and_are_shortened_rather_than_wrapped() {
         let long = "one two three four five six seven eight nine ten eleven twelve";
         let sentence = sentence(long, "small sentence", long);
-        let rows = layout(&sentence, 24, None);
+        let rows = layout(&sentence, 24, None, SENTENCE_ROWS);
         assert_eq!(rows.len(), 1 + 1 + 1, "current fits one row here: {rows:?}");
         assert!(rows[0].text.ends_with(ELLIPSIS), "{:?}", rows[0].text);
         assert!(rows[2].text.ends_with(ELLIPSIS));
@@ -216,7 +234,7 @@ mod tests {
     #[test]
     fn no_colour_means_no_escape_sequences() {
         let sentence = sentence("before", "the quick brown fox", "after");
-        let rows = layout(&sentence, 40, Some(2));
+        let rows = layout(&sentence, 40, Some(2), SENTENCE_ROWS);
         let plain = render(&rows, false);
         assert!(plain.iter().all(|row| !row.contains('\x1b')), "{plain:?}");
         assert!(plain.iter().any(|row| row.contains("brown")));
@@ -225,7 +243,7 @@ mod tests {
     #[test]
     fn colour_underlines_exactly_the_active_word() {
         let sentence = sentence("before", "the quick brown fox", "after");
-        let rows = layout(&sentence, 40, Some(2));
+        let rows = layout(&sentence, 40, Some(2), SENTENCE_ROWS);
         let painted = render(&rows, true);
         let lit: Vec<&String> = painted
             .iter()
@@ -250,8 +268,38 @@ mod tests {
     #[test]
     fn a_blank_neighbour_does_not_take_a_row() {
         let sentence = sentence("   ", "only the current sentence", "");
-        let rows = layout(&sentence, 40, None);
+        let rows = layout(&sentence, 40, None, SENTENCE_ROWS);
         assert_eq!(rows.len(), 1, "blank neighbours are not rows: {rows:?}");
+    }
+
+    #[test]
+    fn a_sentence_longer_than_the_window_scrolls_with_the_voice() {
+        // Twelve words at twenty columns: about four rows of three, so a window of two has to
+        // move, and it has to move *with* the word being spoken rather than away from it.
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        let spoken = Sentence {
+            previous: None,
+            current: text.to_string(),
+            next: None,
+            words: interpolate(text, 12.0),
+        };
+
+        let first = layout(&spoken, 20, Some(0), 2);
+        assert_eq!(first.len(), 2, "the window is the whole block: {first:?}");
+        assert!(first[0].text.starts_with("alpha"), "{first:?}");
+        assert_eq!(first[0].active, Some((0, 5)), "the first word is lit");
+
+        let late = layout(&spoken, 20, Some(11), 2);
+        assert_eq!(late.len(), 2, "still two rows: {late:?}");
+        assert!(
+            !late.iter().any(|row| row.text.starts_with("alpha")),
+            "the beginning has scrolled away: {late:?}"
+        );
+        assert_eq!(
+            late[1].active.map(|(start, end)| start < end),
+            Some(true),
+            "and the word being spoken is the last row, not off the screen: {late:?}"
+        );
     }
 
     #[test]
@@ -262,7 +310,7 @@ mod tests {
             next: None,
             words: Vec::new(),
         };
-        let rows = layout(&sentence, 40, None);
+        let rows = layout(&sentence, 40, None, SENTENCE_ROWS);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].active, None);
         assert_eq!(render(&rows, true), vec!["no timings here".to_string()]);

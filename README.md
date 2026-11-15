@@ -138,7 +138,8 @@ colour alone and keeps the bar.
 `libretto follow` is `read` with the text visible: the sentence before in dim, the sentence
 being spoken wrapped to the width with one word underlined, the next one dim below it, and
 the usual bar underneath. The rows are redrawn in place rather than on a separate screen, so
-your scrollback still holds the book after you stop.
+your scrollback still holds the book after you stop. A sentence needing more than four rows
+scrolls inside that window instead of pushing the terminal around.
 
 ```
 $ libretto follow grok --chapter 9

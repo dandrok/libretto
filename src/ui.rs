@@ -335,7 +335,7 @@ fn frame(
     let mut frame: Vec<String> = Vec::new();
     if let Some(sentence) = sentence {
         let active = captions::index_at(&sentence.words, moment.at);
-        let rows = follow::layout(sentence, width, active);
+        let rows = follow::layout(sentence, width, active, follow::SENTENCE_ROWS);
         frame.extend(follow::render(&rows, colour));
     }
     frame.push(bar_line_with(status, Some(tick), moment.paused, colour));
