@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.7.0](https://github.com/dandrok/libretto/compare/v1.6.0...v1.7.0) - 2026-11-15
+
+### Added
+
+- *(follow)* say when the book is held
+- *(follow)* the underline follows the player, not a stopwatch
+
 ## [1.6.0](https://github.com/dandrok/libretto/compare/v1.5.0...v1.6.0) - 2026-11-15
 
 ### Added
