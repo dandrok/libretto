@@ -11,7 +11,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use crate::captions;
+use crate::follow;
 
 use crate::play::{PlayError, Player};
 
@@ -58,6 +61,13 @@ pub struct Ui {
     interactive: bool,
     colour: bool,
     state: Arc<Mutex<Status>>,
+    /// The sentence the read-along draws, if any. `read` never sets it.
+    follow: Arc<Mutex<Option<follow::Sentence>>>,
+    /// Columns available to the block, margin already taken off.
+    width: usize,
+    /// Where the previous frame stood. Shared across pulses: a block is taller than one
+    /// line, and the next sentence's pulse must know how far up to go.
+    paint: Arc<Paint>,
     /// Shared across pulses, so the drop keeps falling between sentences instead
     /// of restarting at the tap every time the player exits.
     clock: Arc<AtomicUsize>,
@@ -66,14 +76,53 @@ pub struct Ui {
 impl Ui {
     /// `quiet` wins over everything; after that, a terminal decides.
     pub fn new(quiet: bool) -> Self {
+        Self::with_width(quiet, None)
+    }
+
+    /// The read-along needs a width before it can wrap: `--width`, then `$COLUMNS`, then
+    /// eighty columns, always with two columns of margin so no row touches the edge.
+    pub fn with_width(quiet: bool, width: Option<usize>) -> Self {
         let interactive = !quiet && io::stderr().is_terminal();
         let colour = interactive && std::env::var_os("NO_COLOR").is_none();
+        let columns = width
+            .or_else(|| {
+                std::env::var("COLUMNS")
+                    .ok()
+                    .and_then(|value| value.trim().parse().ok())
+            })
+            .unwrap_or(80)
+            .clamp(22, 400);
         Self {
             interactive,
             colour,
             state: Arc::new(Mutex::new(Status::default())),
+            follow: Arc::new(Mutex::new(None)),
+            width: columns - 2,
+            paint: Arc::new(Paint::default()),
             clock: Arc::new(AtomicUsize::new(0)),
         }
+    }
+
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Whether a read-along sentence is on screen.
+    fn following(&self) -> bool {
+        match self.follow.lock() {
+            Ok(slot) => slot.is_some(),
+            Err(poisoned) => poisoned.into_inner().is_some(),
+        }
+    }
+
+    /// Hand the read-along the sentence about to be spoken. Called between sentences,
+    /// which is how the block moves from one sentence to the next.
+    pub fn set_follow(&self, sentence: Option<follow::Sentence>) {
+        let mut slot = match self.follow.lock() {
+            Ok(slot) => slot,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = sentence;
     }
 
     pub fn interactive(&self) -> bool {
@@ -116,6 +165,11 @@ impl Ui {
 
     /// Move the line to a new position and draw it once, without the breath.
     pub fn note(&self, status: Status) {
+        // Following draws the block *and* the bar every frame, so a lone bar row here
+        // would land under the block and start a new one below the old.
+        if self.following() {
+            return;
+        }
         if !self.interactive {
             let mut err = io::stderr();
             let _ = write!(err, "{}", plain_line(&status));
@@ -146,23 +200,37 @@ impl Ui {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let state = Arc::clone(&self.state);
+        let follow = Arc::clone(&self.follow);
         let clock = Arc::clone(&self.clock);
         let flag = Arc::clone(&stop);
         let colour = self.colour;
+        let width = self.width;
+        let paint = Arc::clone(&self.paint);
 
         let handle = thread::spawn(move || {
             let mut err = io::stderr();
+            // The clock starts when the player is handed the file, so the highlight leads
+            // the voice by however long the player takes to make sound — a fraction of a
+            // word, and the same on every sentence.
+            let started = Instant::now();
             while !flag.load(Ordering::Relaxed) {
                 let snapshot = match state.lock() {
                     Ok(state) => state.clone(),
                     Err(poisoned) => poisoned.into_inner().clone(),
                 };
                 let tick = clock.fetch_add(1, Ordering::Relaxed);
-                let line = bar_line(&snapshot, Some(tick), colour);
-                if write!(err, "{line}").is_err() {
+                let sentence = follow.lock().ok().and_then(|slot| slot.clone());
+                let frame = frame(
+                    &snapshot,
+                    tick,
+                    colour,
+                    sentence.as_ref(),
+                    started.elapsed().as_secs_f32(),
+                    width,
+                );
+                if paint.draw(&mut err, &frame).is_err() {
                     break;
                 }
-                let _ = err.flush();
                 thread::sleep(TICK);
             }
         });
@@ -183,6 +251,56 @@ impl Ui {
     fn write_partial(&self, err: &mut impl Write, text: &str) {
         let _ = write!(err, "{text}");
         let _ = err.flush();
+    }
+}
+
+/// One frame: the read-along block, if a sentence was handed over, and always the bar line.
+fn frame(
+    status: &Status,
+    tick: usize,
+    colour: bool,
+    sentence: Option<&follow::Sentence>,
+    at: f32,
+    width: usize,
+) -> Vec<String> {
+    let mut frame: Vec<String> = Vec::new();
+    if let Some(sentence) = sentence {
+        let active = captions::index_at(&sentence.words, at);
+        let rows = follow::layout(sentence, width, active);
+        frame.extend(follow::render(&rows, colour));
+    }
+    frame.push(bar_line(status, Some(tick), colour));
+    frame
+}
+
+/// Where the previous frame stood, so the next one can be drawn over it instead of
+/// below it. One of these lives for the whole run: a block is taller than one line, and
+/// a fresh counter per sentence would leave every sentence on screen.
+#[derive(Debug, Default)]
+struct Paint {
+    drawn: AtomicUsize,
+}
+
+impl Paint {
+    /// Move up over the previous frame, rewrite every row, and erase whatever is left
+    /// below when the new frame is shorter than the old.
+    fn draw(&self, out: &mut impl Write, frame: &[String]) -> io::Result<()> {
+        let drawn = self.drawn.load(Ordering::Relaxed);
+        let mut buffer = String::new();
+        if drawn > 0 {
+            buffer.push_str(&format!("\x1b[{drawn}F"));
+        }
+        for line in frame {
+            buffer.push_str("\r\x1b[2K");
+            buffer.push_str(line);
+            buffer.push('\n');
+        }
+        if frame.len() < drawn {
+            buffer.push_str("\x1b[J");
+        }
+        self.drawn.store(frame.len(), Ordering::Relaxed);
+        write!(out, "{buffer}")?;
+        out.flush()
     }
 }
 
@@ -379,5 +497,90 @@ mod tests {
     fn quiet_wins_over_a_terminal() {
         let ui = Ui::new(true);
         assert!(!ui.interactive(), "--quiet has to mean quiet");
+    }
+
+    fn following_sentence() -> follow::Sentence {
+        follow::Sentence {
+            previous: Some("before this".to_string()),
+            current: "the quick brown fox jumps over the lazy dog".to_string(),
+            next: Some("after this".to_string()),
+            words: captions::interpolate("the quick brown fox jumps over the lazy dog", 4.0),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_a_sentence_draws_the_block_and_then_the_bar() {
+        let status = status(3, 40);
+        let with = frame(&status, 0, false, Some(&following_sentence()), 1.0, 40);
+        assert!(with.len() > 2, "block plus bar: {with:?}");
+        assert!(
+            with.iter().any(|row| row.contains("quick brown fox")),
+            "the sentence is on screen: {with:?}"
+        );
+        assert!(
+            with.last().expect("bar").contains("af_heart"),
+            "the bar is last"
+        );
+
+        let without = frame(&status, 0, false, None, 0.0, 40);
+        assert_eq!(without.len(), 1, "read draws one line and nothing else");
+    }
+
+    #[test]
+    fn the_highlight_advances_with_the_clock() {
+        let sentence = following_sentence();
+        let start = frame(&status(3, 40), 0, true, Some(&sentence), 0.0, 40);
+        let later = frame(&status(3, 40), 0, true, Some(&sentence), 3.0, 40);
+        assert!(
+            start.join("\n").contains(&format!("{ACCENT}{}", "\x1b[4m")),
+            "something is lit at zero"
+        );
+        assert_ne!(start, later, "a different moment lights a different word");
+    }
+
+    #[test]
+    fn the_second_frame_is_drawn_over_the_first() {
+        let paint = Paint::default();
+        let four = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
+
+        let mut out = Vec::new();
+        paint.draw(&mut out, &four).expect("draw");
+        let first = String::from_utf8_lossy(&out).to_string();
+        assert!(!first.contains("\x1b[0F"), "nothing above yet: {first:?}");
+        assert!(first.contains("\r\x1b[2Ka\n"), "{first:?}");
+
+        // The same `Paint` is what carries the height from one sentence to the next: a
+        // fresh counter here is the bug where every sentence lands below the last one.
+        let mut out = Vec::new();
+        paint.draw(&mut out, &four).expect("draw");
+        let second = String::from_utf8_lossy(&out).to_string();
+        assert!(
+            second.starts_with("\x1b[4F"),
+            "the next sentence moves up over all four rows: {second:?}"
+        );
+
+        let mut out = Vec::new();
+        paint.draw(&mut out, &["only".to_string()]).expect("draw");
+        let smaller = String::from_utf8_lossy(&out).to_string();
+        assert!(
+            smaller.ends_with("\x1b[J"),
+            "and clears the rows it no longer fills: {smaller:?}"
+        );
+    }
+
+    #[test]
+    fn the_width_flag_wins_over_the_terminal_and_stays_sane() {
+        assert_eq!(
+            Ui::with_width(true, Some(60)).width(),
+            58,
+            "two columns of margin"
+        );
+        assert_eq!(Ui::with_width(true, Some(5)).width(), 20, "never a sliver");
+        assert_eq!(Ui::with_width(true, Some(9999)).width(), 398);
     }
 }

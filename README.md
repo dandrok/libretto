@@ -99,6 +99,7 @@ crates.io, or `git pull` then `cargo install --path . --locked --force` from a c
 libretto add path/to/book.epub      # or book.pdf
 libretto ls                         # what is in the library, with progress
 libretto read <id>                  # speak it from where you stopped
+libretto follow <id>                # the same, with the sentence and its current word on screen
 libretto                             # same, for the last book you read
 libretto rm <id>                     # forget a book (the file itself is untouched)
 libretto doctor                      # why is it silent?
@@ -131,6 +132,24 @@ saved position still moves one sentence at a time.
 
 `--quiet` turns the wordmark, the colour and the live line off. `NO_COLOR` drops the
 colour alone and keeps the bar.
+
+## Following along
+
+`libretto follow` is `read` with the text visible: the sentence before in dim, the sentence
+being spoken wrapped to the width with one word underlined, the next one dim below it, and
+the usual bar underneath. The rows are redrawn in place rather than on a separate screen, so
+your scrollback still holds the book after you stop.
+
+```
+$ libretto follow grok --chapter 9
+```
+
+Word timings come from the engine when it has them: Kokoro's captioned-speech endpoint
+returns word-level offsets generated during synthesis, and they are cached beside the audio
+so a replay costs no requests. Any other endpoint returns none, and then the words are
+spread over the sentence by length — the same word goes past, a little less precisely.
+`--width N` (else `$COLUMNS`, else 80) decides where the text wraps. Piped, or with
+`--quiet`, `follow` is byte-for-byte `read`.
 
 ## How it works
 
@@ -189,8 +208,9 @@ it can follow:
 ## What it does not do
 
 MOBI/AZW, `.m4b` export, cross-device sync, a full-screen UI or a timeline to scrub —
-the live line is one row on stderr, not a screen. The cache is disposable: delete
-`~/.cache/libretto` any time.
+`follow` draws a few rows on stderr, not an interface you navigate. Pausing and seeking
+belong to the player, since it is the one holding the terminal while a sentence plays. The
+cache is disposable: delete `~/.cache/libretto` any time.
 
 ## License
 

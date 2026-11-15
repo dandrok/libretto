@@ -4,6 +4,21 @@
 //! prose, `sentences` cuts prose into units a TTS engine can speak. Neither
 //! touches the filesystem or the network, so both are tested directly.
 
+/// Book text as it may be shown on a terminal. Control characters become spaces: an
+/// EPUB body is untrusted, and a raw `ESC` in it would move the cursor, rewrite the
+/// prompt or set the clipboard (OSC 52) the moment the read-along prints the sentence.
+pub fn visible(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 /// Sentence terminators. `…` is here because EPUBs from retail pipelines use it
 /// instead of three dots more often than you would expect.
 const TERMINATORS: [char; 4] = ['.', '!', '?', '…'];

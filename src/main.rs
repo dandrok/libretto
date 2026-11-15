@@ -13,10 +13,12 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use libretto::cache::{Cache, CacheError};
+use libretto::captions;
 use libretto::config::{self, Overrides, Settings};
 use libretto::doctor;
 use libretto::epub::{self, EpubError};
 use libretto::estimate;
+use libretto::follow;
 use libretto::pdf::{self, PdfError};
 use libretto::play::{self, Mpv, PlayError};
 use libretto::store::{self, BookRecord, Library, Progress, Store, StoreError};
@@ -24,7 +26,7 @@ use libretto::text;
 use libretto::tts::{Kokoro, SpeechRequest, TtsError};
 use libretto::ui::{self, Ui};
 
-use crate::cli::{Cli, Command};
+use crate::cli::{BookArgs, Cli, Command};
 
 /// Exit codes are part of the interface; scripts branch on them.
 const EXIT_OK: u8 = 0;
@@ -62,37 +64,14 @@ fn run() -> Result<(), AppError> {
             list(&store, speed)
         }
         Some(Command::Rm { id }) => remove(&store, &id),
-        Some(Command::Read {
-            id,
-            chapter,
-            skip,
-            rewind,
-            sentences,
-            voice,
-            speed,
-            endpoint,
-            model,
-            player,
-            prefetch,
-        }) => read(
-            &store,
-            ReadRequest {
-                id,
-                chapter,
-                skip,
-                rewind,
-                sentences,
-            },
-            Overrides {
-                voice,
-                speed,
-                endpoint,
-                model,
-                player,
-                prefetch,
-            },
-            cli.quiet,
-        ),
+        Some(Command::Read(args)) => {
+            let (request, overrides) = split(args);
+            read(&store, request, overrides, cli.quiet, false, cli.width)
+        }
+        Some(Command::Follow(args)) => {
+            let (request, overrides) = split(args);
+            read(&store, request, overrides, cli.quiet, true, cli.width)
+        }
         Some(Command::Doctor { endpoint, player }) => check(Overrides {
             endpoint,
             player,
@@ -144,6 +123,8 @@ fn resume(store: &Store, quiet: bool) -> Result<(), AppError> {
         },
         Overrides::default(),
         quiet,
+        false,
+        None,
     )
 }
 
@@ -276,6 +257,28 @@ fn remove(store: &Store, id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// One argument block, two verbs: `read` and `follow` share everything except how the
+/// sentence reaches the screen.
+fn split(args: BookArgs) -> (ReadRequest, Overrides) {
+    (
+        ReadRequest {
+            id: args.id,
+            chapter: args.chapter,
+            skip: args.skip,
+            rewind: args.rewind,
+            sentences: args.sentences,
+        },
+        Overrides {
+            voice: args.voice,
+            speed: args.speed,
+            endpoint: args.endpoint,
+            model: args.model,
+            player: args.player,
+            prefetch: args.prefetch,
+        },
+    )
+}
+
 struct ReadRequest {
     id: Option<String>,
     chapter: Option<usize>,
@@ -289,12 +292,14 @@ fn read(
     request: ReadRequest,
     overrides: Overrides,
     quiet: bool,
+    following: bool,
+    width: Option<usize>,
 ) -> Result<(), AppError> {
     let mut library = store.load()?;
     // Cloned: the progress closure below mutates the library while this is read.
     let mut record = pick_book(&library, request.id.as_deref())?.clone();
 
-    let ui = Ui::new(quiet);
+    let ui = Ui::with_width(quiet, if following { width } else { None });
     let settings = Settings::resolve(&config::load()?, overrides);
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
@@ -358,6 +363,30 @@ fn read(
             )
         })
         .unwrap_or_default();
+    // What the read-along draws for one sentence: its neighbours for context, and its
+    // words spread over the sentence's estimated length. The engine's own word timings
+    // replace the estimate when it has them.
+    let follow_sentence = |index: usize| -> follow::Sentence {
+        // The view prints book text, which is not ours: control characters are flattened
+        // before anything reaches the terminal, and the word list is built from the
+        // flattened text so the highlight still addresses the words on screen.
+        let current = text::visible(sentences.get(index).map(String::as_str).unwrap_or_default());
+        let neighbour = |offset: isize| -> Option<String> {
+            let at = index.checked_add_signed(offset)?;
+            sentences.get(at).map(|sentence| text::visible(sentence))
+        };
+        let duration = estimate::duration(current.chars().count(), settings.speed);
+        follow::Sentence {
+            previous: neighbour(-1),
+            words: captions::interpolate(&current, duration),
+            current,
+            next: neighbour(1),
+        }
+    };
+    if following {
+        ui.set_follow(Some(follow_sentence(start)));
+    }
+
     println!(
         "{} — chapter {}/{} · starting at sentence {}/{}{}",
         printable(&record.title),
@@ -404,6 +433,9 @@ fn read(
             let mut snapshot = base.clone();
             snapshot.sentence = next;
             ui.note(snapshot);
+            if following {
+                ui.set_follow(Some(follow_sentence(next)));
+            }
             library.progress.insert(record.id.clone(), position);
             library.last_read = Some(record.id.clone());
             if let Err(error) = store.save(&library) {

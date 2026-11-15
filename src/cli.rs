@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub quiet: bool,
 
+    /// Wrap the read-along text at this column (default: $COLUMNS, else 80)
+    #[arg(long, global = true)]
+    pub width: Option<usize>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -45,38 +49,45 @@ pub enum Command {
         player: Option<String>,
     },
     /// Read a book aloud from where you stopped (default: the last book)
-    Read {
-        /// Full id or any unique prefix
-        id: Option<String>,
-        /// Start at this chapter (1-based), ignoring the stored position
-        #[arg(long)]
-        chapter: Option<usize>,
-        /// Start this many sentences after the stored position
-        #[arg(long, default_value_t = 0)]
-        skip: usize,
-        /// Replay this many sentences before the stored position
-        #[arg(long, default_value_t = 0)]
-        rewind: usize,
-        /// Stop after this many sentences
-        #[arg(long)]
-        sentences: Option<usize>,
-        /// Voice name, e.g. af_heart
-        #[arg(long)]
-        voice: Option<String>,
-        /// Speech speed multiplier, 0.25 to 4.0
-        #[arg(long)]
-        speed: Option<f32>,
-        /// TTS base URL, e.g. http://127.0.0.1:8880/v1
-        #[arg(long)]
-        endpoint: Option<String>,
-        /// Model name sent to the endpoint
-        #[arg(long)]
-        model: Option<String>,
-        /// Player program (default mpv)
-        #[arg(long)]
-        player: Option<String>,
-        /// Sentences to synthesize ahead
-        #[arg(long)]
-        prefetch: Option<usize>,
-    },
+    Read(BookArgs),
+    /// Read aloud with the text on screen and the current word underlined
+    Follow(BookArgs),
+}
+
+/// What `read` and `follow` both need: which book, where to start, how it sounds. The
+/// two commands differ only in presentation, so they share one argument block.
+#[derive(Debug, clap::Args)]
+pub struct BookArgs {
+    /// Full id or any unique prefix
+    pub id: Option<String>,
+    /// Start at this chapter (1-based), ignoring the stored position
+    #[arg(long)]
+    pub chapter: Option<usize>,
+    /// Start this many sentences after the stored position
+    #[arg(long, default_value_t = 0)]
+    pub skip: usize,
+    /// Replay this many sentences before the stored position
+    #[arg(long, default_value_t = 0)]
+    pub rewind: usize,
+    /// Stop after this many sentences
+    #[arg(long)]
+    pub sentences: Option<usize>,
+    /// Voice name, e.g. af_heart
+    #[arg(long)]
+    pub voice: Option<String>,
+    /// Speech speed multiplier, 0.25 to 4.0
+    #[arg(long)]
+    pub speed: Option<f32>,
+    /// TTS base URL, e.g. http://127.0.0.1:8880/v1
+    #[arg(long)]
+    pub endpoint: Option<String>,
+    /// Model name sent to the endpoint
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Player program (default mpv)
+    #[arg(long)]
+    pub player: Option<String>,
+    /// Sentences to synthesize ahead
+    #[arg(long)]
+    pub prefetch: Option<usize>,
 }

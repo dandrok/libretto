@@ -12,11 +12,17 @@
 /// Characters per second at speed 1.0, measured for `af_heart` on Kokoro.
 pub const CHARS_PER_SECOND: f32 = 16.1;
 
-/// Seconds of speech for `chars` at `speed`. `speed` is clamped to the range the
-/// engine accepts, so a stray zero cannot divide by zero.
-pub fn seconds(chars: usize, speed: f32) -> u64 {
+/// Seconds of speech for `chars` at `speed`, unrounded — for the read-along, which
+/// spreads a sentence's words across it. `speed` is clamped to the range the engine
+/// accepts, so a stray zero cannot divide by zero.
+pub fn duration(chars: usize, speed: f32) -> f32 {
     let rate = CHARS_PER_SECOND * speed.clamp(0.25, 4.0);
-    ((chars as f32) / rate).round() as u64
+    chars as f32 / rate
+}
+
+/// The same, rounded to whole seconds for anything a person reads.
+pub fn seconds(chars: usize, speed: f32) -> u64 {
+    duration(chars, speed).round() as u64
 }
 
 /// `11h 06m`, `59m`, `<1m` — no seconds, because nobody counts them on a book.

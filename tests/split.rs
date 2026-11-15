@@ -105,3 +105,19 @@ fn fragments_with_nothing_to_pronounce_are_not_sentences() {
     let text = "\u{2022}\n\u{2014}\u{2014}\n\u{2026}\n...\n\nReal prose here.\n1.2\n";
     assert_eq!(sentences(text, MAX), vec!["Real prose here.", "1.2"]);
 }
+
+#[test]
+fn a_control_character_never_reaches_the_terminal() {
+    // A book body is untrusted input: an ESC in it could move the cursor, rewrite the
+    // prompt or set the clipboard (OSC 52) the moment the read-along prints the sentence.
+    let hostile = "clear the screen \u{1b}[2J and set the clipboard \u{1b}]52;c;zz\u{7}";
+    let shown = libretto::text::visible(hostile);
+    assert!(
+        !shown.chars().any(|character| character.is_control()),
+        "{shown:?}"
+    );
+    assert!(
+        shown.contains("clear the screen"),
+        "the words survive: {shown:?}"
+    );
+}

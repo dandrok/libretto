@@ -28,6 +28,8 @@ In scope:
 - `libretto add <path>` — import an EPUB, or a PDF with a text layer, and index its chapters
 - `libretto ls` — the library with per-book progress
 - `libretto read [id|prefix]` — synthesize and play from the stored position, resuming next run
+- `libretto follow [id|prefix]` — the same, with the current sentence on screen and the word
+  being spoken underlined
 - bare `libretto` — resume the last book read
 - `libretto rm <id|prefix>` — remove an entry (never the source file)
 - `libretto doctor` — library, config, player, endpoint and cache in one report
@@ -35,8 +37,7 @@ In scope:
 - Sentence and chapter skipping, and rewinding
 
 Out of scope (explicit): MOBI/AZW3, `.m4b` export, a full-screen TUI, cross-device sync,
-accounts, telemetry, any TTS engine that is not OpenAI-compatible HTTP, word-level
-highlighting.
+accounts, telemetry, any TTS engine that is not OpenAI-compatible HTTP.
 
 ## 3. Acceptance criteria
 
@@ -102,6 +103,16 @@ on the tagged tree.
   `tests/cli_ls.rs::ls_omits_the_estimate_for_an_index_written_before_the_counts`,
   `src/store.rs::tests::time_left_shrinks_as_the_reader_moves`,
   `src/estimate.rs::tests::a_sentence_takes_its_characters_at_the_measured_rate`
+- AC-20: `follow` is a presentation of `read`: on a terminal it draws the sentence being spoken
+  wrapped to the width with the word being spoken underlined, redrawing in place, and on a
+  pipe or under `--quiet` it emits exactly what `read` emits — same words, no escape
+  sequences, same exit code —
+  `tests/cli_follow.rs::follow_on_a_pipe_is_read_byte_for_byte`,
+  `tests/cli_follow.rs::follow_quiet_is_plain_and_says_where_it_stopped`,
+  `tests/cli_follow.rs::follow_accepts_the_same_arguments_as_read`,
+  `src/follow.rs::tests::the_active_word_is_lit_on_the_row_that_holds_it`,
+  `src/follow.rs::tests::a_long_sentence_wraps_without_breaking_a_word`,
+  `src/ui.rs::tests::the_width_flag_wins_over_the_terminal_and_stays_sane`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
