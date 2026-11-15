@@ -6,7 +6,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 
@@ -30,6 +33,22 @@ pub enum PlayError {
     Cache(#[from] CacheError),
 }
 
+/// Where a player is inside the file it is playing.
+///
+/// The read-along draws against this rather than a wall clock, because a paused player
+/// keeps its process alive: only the player knows the audio stopped, and `seconds` then
+/// stands still on its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Position {
+    pub seconds: f64,
+    pub paused: bool,
+}
+
+/// How often the player is asked where it is. A word lasts 150–400 ms, so four samples
+/// inside the shortest one is enough and costs two tiny round trips.
+#[cfg(unix)]
+const POLL: Duration = Duration::from_millis(60);
+
 /// Anything that can play one file to completion.
 pub trait Player {
     fn play(&self, file: &Path) -> Result<(), PlayError>;
@@ -37,29 +56,76 @@ pub trait Player {
 
 /// The system player. argv only — never a shell string, and the program name is
 /// resolved from `PATH` so `--player ffplay` works.
+///
+/// mpv is also given a private IPC socket, which is the only way to learn where playback
+/// is and whether it is paused. A player that ignores the flag simply never answers, and
+/// the presentation falls back to its wall clock.
 pub struct Mpv {
     program: String,
+    position: Arc<Mutex<Option<Position>>>,
 }
 
 impl Mpv {
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
+            position: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The latest position, shared with whoever is drawing. `None` while nothing plays.
+    pub fn clock(&self) -> Arc<Mutex<Option<Position>>> {
+        Arc::clone(&self.position)
     }
 }
 
 impl Player for Mpv {
     fn play(&self, file: &Path) -> Result<(), PlayError> {
-        let status = Command::new(&self.program)
-            .arg("--no-video")
-            .arg("--really-quiet")
+        let socket = Socket::open();
+        let mut command = Command::new(&self.program);
+        command.arg("--no-video").arg("--really-quiet");
+        if let Some(socket) = &socket {
+            command.arg(format!("--input-ipc-server={}", socket.path().display()));
+        }
+        let mut child = command
             .arg(file)
-            .status()
+            .spawn()
             .map_err(|error| PlayError::Spawn {
                 program: self.program.clone(),
                 reason: error.to_string(),
             })?;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let watcher = socket.map(|socket| {
+            let path = socket.path();
+            let position = Arc::clone(&self.position);
+            let stop = Arc::clone(&stop);
+            // The socket has to outlive the thread, not the spawn call.
+            std::thread::spawn(move || {
+                let _keep = socket;
+                while !stop.load(Ordering::Relaxed) {
+                    let latest = query(&path);
+                    if let Ok(mut slot) = position.lock() {
+                        *slot = latest;
+                    }
+                    std::thread::sleep(POLL);
+                }
+            })
+        });
+
+        let waited = child.wait();
+        stop.store(true, Ordering::Relaxed);
+        if let Some(watcher) = watcher {
+            let _ = watcher.join();
+        }
+        if let Ok(mut slot) = self.position.lock() {
+            *slot = None;
+        }
+
+        let status = waited.map_err(|error| PlayError::Exit {
+            program: self.program.clone(),
+            status: error.to_string(),
+        })?;
         if !status.success() {
             return Err(PlayError::Exit {
                 program: self.program.clone(),
@@ -68,6 +134,102 @@ impl Player for Mpv {
         }
         Ok(())
     }
+}
+
+/// A private directory for the IPC socket, removed when playback ends.
+///
+/// mpv creates the socket itself, so the directory has to exist first and be ours: a
+/// predictable path in a world-writable temp directory is something another local user
+/// could pre-create, and then playback either fails or reports positions that never
+/// happened. The name is unique per run and the directory is 0700.
+#[cfg(unix)]
+struct Socket {
+    dir: PathBuf,
+}
+
+#[cfg(unix)]
+impl Socket {
+    fn open() -> Option<Self> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let dir = base.join(format!("libretto-ipc-{}-{stamp}", std::process::id()));
+        // `create_dir` fails if the path exists, which is exactly what keeps a planted
+        // directory or symlink out of this.
+        std::fs::create_dir(&dir).ok()?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+        Some(Self { dir })
+    }
+
+    fn path(&self) -> PathBuf {
+        self.dir.join("mpv.sock")
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Socket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(not(unix))]
+struct Socket;
+
+#[cfg(not(unix))]
+impl Socket {
+    fn open() -> Option<Self> {
+        None
+    }
+
+    fn path(&self) -> PathBuf {
+        PathBuf::new()
+    }
+}
+
+/// Ask the player where it is: one short connection, two commands, two replies.
+#[cfg(unix)]
+fn query(path: &Path) -> Option<Position> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(path).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .ok()?;
+    stream
+        .write_all(b"{\"command\":[\"get_property\",\"time-pos\"]}\n{\"command\":[\"get_property\",\"pause\"]}\n")
+        .ok()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+    let seconds = reply_data(&line, serde_json::Value::as_f64)?;
+    line.clear();
+    reader.read_line(&mut line).ok()?;
+    let paused = reply_data(&line, serde_json::Value::as_bool)?;
+    Some(Position { seconds, paused })
+}
+
+#[cfg(not(unix))]
+fn query(_path: &Path) -> Option<Position> {
+    None
+}
+
+/// mpv answers `{"data": null, "error": "success"}` before playback starts. That is not
+/// a position and not an error, so it reads as `None` and the caller keeps waiting.
+fn reply_data<T>(line: &str, take: impl Fn(&serde_json::Value) -> Option<T>) -> Option<T> {
+    let reply: serde_json::Value = serde_json::from_str(line).ok()?;
+    if reply.get("error")?.as_str()? != "success" {
+        return None;
+    }
+    take(reply.get("data")?)
 }
 
 /// Result of a playback run, so the caller can persist the position.
@@ -424,5 +586,109 @@ mod tests {
             ),
             "got {error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_player_is_told_where_the_socket_is() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let record = dir.path().join("argv");
+        let stub = dir.path().join("player");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                record.display()
+            ),
+        )
+        .expect("stub");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let file = dir.path().join("sentence.mp3");
+        std::fs::write(&file, b"ID3").expect("file");
+
+        Mpv::new(stub.to_str().expect("path"))
+            .play(&file)
+            .expect("the stub exits 0");
+
+        let argv = std::fs::read_to_string(&record).expect("argv");
+        assert!(
+            argv.lines()
+                .any(|line| line.starts_with("--input-ipc-server=")),
+            "mpv is given a socket to answer on: {argv:?}"
+        );
+        assert!(
+            argv.lines().any(|line| line.ends_with("sentence.mp3")),
+            "and the file to play: {argv:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_position_is_read_from_the_socket_including_a_pause() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mpv.sock");
+        let listener = UnixListener::bind(&path).expect("bind");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("first command");
+            assert!(
+                line.contains("\"time-pos\""),
+                "asked for the position: {line}"
+            );
+            stream
+                .write_all(b"{\"data\":12.5,\"error\":\"success\"}\n")
+                .expect("reply");
+            line.clear();
+            reader.read_line(&mut line).expect("second command");
+            assert!(
+                line.contains("\"pause\""),
+                "asked whether it is paused: {line}"
+            );
+            stream
+                .write_all(b"{\"data\":true,\"error\":\"success\"}\n")
+                .expect("reply");
+        });
+
+        let position = query(&path).expect("a position");
+        server.join().expect("server");
+
+        assert!((position.seconds - 12.5).abs() < 1e-6, "{position:?}");
+        assert!(position.paused, "a paused player says so: {position:?}");
+    }
+
+    #[test]
+    fn no_socket_and_no_position_are_the_same_answer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            query(&dir.path().join("absent.sock")),
+            None,
+            "a player that never answers leaves the clock to the caller"
+        );
+    }
+
+    #[test]
+    fn a_reply_before_playback_is_not_a_position() {
+        assert_eq!(
+            reply_data(
+                "{\"data\":null,\"error\":\"success\"}",
+                serde_json::Value::as_f64
+            ),
+            None
+        );
+        assert_eq!(
+            reply_data(
+                "{\"data\":1.0,\"error\":\"property unavailable\"}",
+                serde_json::Value::as_f64
+            ),
+            None
+        );
+        assert_eq!(reply_data("not json", serde_json::Value::as_f64), None);
     }
 }

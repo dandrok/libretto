@@ -304,6 +304,15 @@ fn read(
     let engine = Kokoro::new(settings.endpoint.clone())?;
     let cache = Cache::open()?;
     let player = Mpv::new(settings.player.clone());
+    {
+        // The view asks the player where it is instead of counting seconds: mpv answers
+        // over IPC, a player without a socket answers nothing, and the wall clock stays
+        // the fallback for both.
+        let position = player.clock();
+        ui.set_clock(std::sync::Arc::new(move || {
+            position.lock().ok().and_then(|slot| *slot)
+        }));
+    }
 
     let book_path = PathBuf::from(&record.source_path);
     // The path came out of the library file, so check it still is the book that
