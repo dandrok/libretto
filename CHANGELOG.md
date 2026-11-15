@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.6.0](https://github.com/dandrok/libretto/compare/v1.5.0...v1.6.0) - 2026-11-15
+
+### Added
+
+- *(follow)* the read-along view and the command that draws it
+- *(follow)* lay a sentence out across rows with one word lit
+
 ## [1.5.0](https://github.com/dandrok/libretto/compare/v1.4.0...v1.5.0) - 2026-11-15
 
 ### Added
