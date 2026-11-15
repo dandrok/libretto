@@ -101,6 +101,7 @@ impl Sandbox {
                 content_hash: format!("hash{index:04}"),
                 chapter_count: 12,
                 sentence_counts: vec![40; 12],
+                chapter_chars: vec![4000; 12],
                 added_at: now_seconds(),
             });
             if index % 2 == 0 {

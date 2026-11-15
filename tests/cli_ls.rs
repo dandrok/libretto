@@ -96,12 +96,12 @@ fn bare_invocation_on_an_empty_library_is_not_an_error() {
 }
 
 /// An index with per-chapter sentence counts, for the percentage tests below.
-fn seed_index(sandbox: &Sandbox, counts: &str) {
+fn seed_index(sandbox: &Sandbox, counts: &str, chars: &str) {
     std::fs::create_dir_all(sandbox.data_dir()).expect("data dir");
     std::fs::write(
         sandbox.library_path(),
         format!(
-            r#"{{"version":1,"books":[{{"id":"sized-book-aaaa","title":"A Sized Book","author":null,"source_path":"/books/sized.epub","content_hash":"hash","chapter_count":3,{counts}"added_at":0}}],"progress":{{"sized-book-aaaa":{{"chapter_index":1,"sentence_index":5,"updated_at":0}}}},"last_read":null}}"#
+            r#"{{"version":1,"books":[{{"id":"sized-book-aaaa","title":"A Sized Book","author":null,"source_path":"/books/sized.epub","content_hash":"hash","chapter_count":3,{counts}{chars}"added_at":0}}],"progress":{{"sized-book-aaaa":{{"chapter_index":1,"sentence_index":5,"updated_at":0}}}},"last_read":null}}"#
         ),
     )
     .expect("seed library");
@@ -112,7 +112,7 @@ fn ls_reports_a_percentage_inside_the_chapter_the_reader_is_in() {
     let sandbox = Sandbox::new();
     // Three chapters of ten sentences; five sentences into the second is 15 of
     // 30 — 50%. Counting chapters alone would say 33%.
-    seed_index(&sandbox, r#""sentence_counts":[10,10,10],"#);
+    seed_index(&sandbox, r#""sentence_counts":[10,10,10],"#, "");
 
     let stdout = sandbox.stdout_of(&["ls"]);
     assert!(stdout.contains(" 50%"), "sentence-exact: {stdout}");
@@ -126,9 +126,40 @@ fn ls_reports_a_percentage_inside_the_chapter_the_reader_is_in() {
 fn ls_falls_back_to_chapter_granularity_for_an_old_record() {
     let sandbox = Sandbox::new();
     // The same position in an index written before the counts existed.
-    seed_index(&sandbox, "");
+    seed_index(&sandbox, "", "");
 
     let stdout = sandbox.stdout_of(&["ls"]);
     assert!(stdout.contains(" 33%"), "chapter granularity: {stdout}");
     assert!(stdout.contains("ch 2/3"), "{stdout}");
+}
+
+#[test]
+fn ls_reports_how_long_is_left() {
+    let sandbox = Sandbox::new();
+    // Three chapters of 10,000 characters each, five sentences into the second:
+    // 30,000 - (10,000 + 5,000) = 15,000 characters ahead, about 15 minutes at the
+    // measured 16.1 characters per second.
+    seed_index(
+        &sandbox,
+        r#""sentence_counts":[10,10,10],"#,
+        r#""chapter_chars":[10000,10000,10000],"#,
+    );
+
+    let stdout = sandbox.stdout_of(&["ls"]);
+    assert!(
+        stdout.contains("~15m left"),
+        "a listening estimate: {stdout}"
+    );
+}
+
+#[test]
+fn ls_omits_the_estimate_for_an_index_written_before_the_counts() {
+    let sandbox = Sandbox::new();
+    seed_index(&sandbox, "", "");
+
+    let stdout = sandbox.stdout_of(&["ls"]);
+    assert!(
+        !stdout.contains("~"),
+        "no number is better than an invented one: {stdout}"
+    );
 }

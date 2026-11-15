@@ -430,3 +430,53 @@ fn read_fills_in_sentence_counts_for_a_library_added_before_them() {
         "both chapters were counted: {counts:?}"
     );
 }
+
+#[test]
+fn read_adds_the_character_counts_a_1_3_0_index_lacks() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "chars.epub",
+        Some("Charred Book"),
+        &[
+            ("One", "First sentence here. Second one."),
+            ("Two", "Third."),
+        ],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    // What 1.3.0 wrote: the sentence counts, no character counts.
+    let text = std::fs::read_to_string(sandbox.library_path()).expect("library");
+    let mut json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    json["books"][0]
+        .as_object_mut()
+        .expect("book object")
+        .remove("chapter_chars");
+    std::fs::write(sandbox.library_path(), json.to_string()).expect("rewrite library");
+
+    let endpoint = fake.endpoint();
+    let stdout = sandbox.stdout_of(&read_args(
+        "charred",
+        &fake,
+        &["--endpoint", &endpoint, "--sentences", "1"],
+    ));
+    assert!(
+        stdout.contains("~<1m left"),
+        "three short sentences are under a minute: {stdout}"
+    );
+
+    let text = std::fs::read_to_string(sandbox.library_path()).expect("library");
+    let json: serde_json::Value = serde_json::from_str(&text).expect("json");
+    let chars = json["books"][0]["chapter_chars"]
+        .as_array()
+        .expect("read filled the character counts in");
+    assert_eq!(chars.len(), 2, "one per chapter: {chars:?}");
+    assert!(
+        chars.iter().all(|count| count.as_u64().unwrap_or(0) > 0),
+        "the estimate can be computed now: {chars:?}"
+    );
+    assert!(
+        json["books"][0]["sentence_counts"].is_array(),
+        "the counts 1.3.0 wrote are left alone"
+    );
+}

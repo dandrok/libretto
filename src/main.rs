@@ -16,6 +16,7 @@ use libretto::cache::{Cache, CacheError};
 use libretto::config::{self, Overrides, Settings};
 use libretto::doctor;
 use libretto::epub::{self, EpubError};
+use libretto::estimate;
 use libretto::pdf::{self, PdfError};
 use libretto::play::{self, Mpv, PlayError};
 use libretto::store::{self, BookRecord, Library, Progress, Store, StoreError};
@@ -52,7 +53,14 @@ fn run() -> Result<(), AppError> {
     let store = Store::open().map_err(AppError::Store)?;
     match cli.command {
         Some(Command::Add { path }) => add(&store, &path),
-        Some(Command::Ls) => list(&store),
+        Some(Command::Ls) => {
+            // The estimate follows the configured speed; a broken config must not turn
+            // listing a library into a failure, so it falls back to the default.
+            let speed = config::load()
+                .map(|config| Settings::resolve(&config, Overrides::default()).speed)
+                .unwrap_or(config::DEFAULT_SPEED);
+            list(&store, speed)
+        }
         Some(Command::Rm { id }) => remove(&store, &id),
         Some(Command::Read {
             id,
@@ -151,14 +159,43 @@ fn load_book(path: &Path) -> Result<epub::Book, AppError> {
     })
 }
 
-/// Sentences per chapter, counted with the same splitter `read` uses, so a
-/// percentage taken from these counts lands on the sentence that will actually
-/// be spoken.
-fn chapter_sentence_counts(book: &epub::Book) -> Vec<usize> {
-    book.chapters
+/// Sentences per chapter, and the characters they hold, counted with the same
+/// splitter `read` uses — so the percentage lands on the sentence that will be
+/// spoken and the time estimate describes the text that will be read out.
+fn chapter_shape(book: &epub::Book) -> (Vec<usize>, Vec<usize>) {
+    let mut sentences = Vec::with_capacity(book.chapters.len());
+    let mut chars = Vec::with_capacity(book.chapters.len());
+    for chapter in &book.chapters {
+        let split = text::sentences(&chapter.text, SENTENCE_LIMIT);
+        sentences.push(split.len());
+        chars.push(split.iter().map(|sentence| sentence.chars().count()).sum());
+    }
+    (sentences, chars)
+}
+
+/// Characters still ahead, counted against the chapter that is actually open rather
+/// than assuming its sentences are all the same length like `chars_left` must.
+/// `None` when the record has no per-chapter totals yet.
+fn chars_left_in_book(
+    record: &BookRecord,
+    chapter_index: usize,
+    sentence_index: usize,
+    chapter_sentences: &[String],
+) -> Option<usize> {
+    if record.chapter_chars.len() != record.chapter_count || record.chapter_chars.is_empty() {
+        return None;
+    }
+    let total: usize = record.chapter_chars.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let behind: usize = record.chapter_chars.iter().take(chapter_index).sum();
+    let spoken: usize = chapter_sentences
         .iter()
-        .map(|chapter| text::sentences(&chapter.text, SENTENCE_LIMIT).len())
-        .collect()
+        .take(sentence_index)
+        .map(|sentence| sentence.chars().count())
+        .sum();
+    Some(total.saturating_sub(behind.saturating_add(spoken)))
 }
 
 fn add(store: &Store, path: &Path) -> Result<(), AppError> {
@@ -180,6 +217,7 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
         .unwrap_or_else(|_| path.to_path_buf())
         .display()
         .to_string();
+    let (sentence_counts, chapter_chars) = chapter_shape(&book);
     let record = BookRecord {
         id: id.clone(),
         title: book.title.clone(),
@@ -187,7 +225,8 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
         source_path,
         content_hash: hash,
         chapter_count: book.chapters.len(),
-        sentence_counts: chapter_sentence_counts(&book),
+        sentence_counts,
+        chapter_chars,
         added_at: store::now_seconds(),
     };
     library.insert(record);
@@ -200,7 +239,7 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn list(store: &Store) -> Result<(), AppError> {
+fn list(store: &Store, speed: f32) -> Result<(), AppError> {
     let library = store.load()?;
     if library.books.is_empty() {
         println!("no books");
@@ -208,14 +247,23 @@ fn list(store: &Store) -> Result<(), AppError> {
     }
     for book in &library.books {
         let progress = library.progress_of(&book.id);
-        println!(
-            "{:<40} {:>3}%  ch {}/{}  {}",
-            book.id,
-            library.percent_of(book),
-            progress.chapter_index + 1,
-            book.chapter_count,
-            printable(&book.title)
-        );
+        let mut row = vec![
+            format!("{:<40}", book.id),
+            format!("{:>3}%", library.percent_of(book)),
+            format!("ch {}/{}", progress.chapter_index + 1, book.chapter_count),
+        ];
+        // No estimate for an index written before the counts existed: a blank beats a
+        // number invented from a chapter count.
+        match book.chars_left(progress) {
+            Some(0) => row.push("done".to_string()),
+            Some(chars) => row.push(format!(
+                "~{} left",
+                estimate::human(estimate::seconds(chars, speed))
+            )),
+            None => {}
+        }
+        row.push(printable(&book.title));
+        println!("{}", row.join("  "));
     }
     Ok(())
 }
@@ -263,8 +311,12 @@ fn read(
     // `ls` could only report chapter boundaries. The book is open right now:
     // count it and put the result in the in-memory index, so the position saves
     // below carry it and the next `ls` is exact.
-    if record.sentence_percent(progress).is_none() && record.chapter_count == book.chapters.len() {
-        record.sentence_counts = chapter_sentence_counts(&book);
+    let shape_is_stale = record.sentence_percent(progress).is_none()
+        || record.chapter_chars.len() != record.chapter_count;
+    if shape_is_stale && record.chapter_count == book.chapters.len() {
+        let (sentence_counts, chapter_chars) = chapter_shape(&book);
+        record.sentence_counts = sentence_counts;
+        record.chapter_chars = chapter_chars;
         if let Some(slot) = library.books.iter_mut().find(|book| book.id == record.id) {
             *slot = record.clone();
         }
@@ -298,13 +350,22 @@ fn read(
         model: settings.model.clone(),
     };
 
+    let left = chars_left_in_book(&record, chapter_index, start, &sentences)
+        .map(|chars| {
+            format!(
+                " · ~{} left",
+                estimate::human(estimate::seconds(chars, settings.speed))
+            )
+        })
+        .unwrap_or_default();
     println!(
-        "{} — chapter {}/{} · starting at sentence {}/{}",
+        "{} — chapter {}/{} · starting at sentence {}/{}{}",
         printable(&record.title),
         chapter_index + 1,
         book.chapters.len(),
         start + 1,
-        sentences.len()
+        sentences.len(),
+        left
     );
     ui.splash();
 

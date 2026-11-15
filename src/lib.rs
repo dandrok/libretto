@@ -9,6 +9,7 @@ pub mod cache;
 pub mod config;
 pub mod doctor;
 pub mod epub;
+pub mod estimate;
 pub mod paths;
 pub mod pdf;
 pub mod play;
