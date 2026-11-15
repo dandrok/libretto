@@ -48,6 +48,14 @@ fn add_creates_one_entry() {
         counts.iter().all(|count| count.as_u64().unwrap_or(0) > 0),
         "every chapter of the fixture has prose: {counts:?}"
     );
+    let chars = entry["chapter_chars"]
+        .as_array()
+        .expect("character counts are recorded at add");
+    assert_eq!(chars.len(), 2, "one per chapter: {chars:?}");
+    assert!(
+        chars.iter().all(|count| count.as_u64().unwrap_or(0) > 0),
+        "the estimate needs characters, not just sentences: {chars:?}"
+    );
     assert!(
         entry["source_path"]
             .as_str()

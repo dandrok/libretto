@@ -68,6 +68,11 @@ pub struct BookRecord {
     /// written before 1.3.0 have no counts and fall back to chapter boundaries.
     #[serde(default)]
     pub sentence_counts: Vec<usize>,
+    /// Characters per chapter, summed over the sentences `read` will speak. Together
+    /// with `sentence_counts` this is what a time estimate needs: how many characters
+    /// are still ahead. Empty in records written before 1.4.0.
+    #[serde(default)]
+    pub chapter_chars: Vec<usize>,
     pub added_at: u64,
 }
 
@@ -93,6 +98,47 @@ impl BookRecord {
             .unwrap_or(0)
             .min(progress.sentence_index);
         Some((behind.saturating_add(within).saturating_mul(100) / total).min(100) as u8)
+    }
+
+    /// Whether the two count lists describe the book `chapter_count` claims. A stale
+    /// or hand-edited index answers `false` instead of producing a confident number.
+    fn counts_agree(&self) -> bool {
+        self.chapter_count > 0
+            && self.chapter_count == self.sentence_counts.len()
+            && self.chapter_count == self.chapter_chars.len()
+    }
+
+    /// Characters still to speak from the stored position — what `ls` needs, and it
+    /// has the index and nothing else. Inside the current chapter it assumes every
+    /// sentence is the same length, because the text is not open; `read` counts the
+    /// spoken prefix exactly and does not go through here.
+    ///
+    /// `None` for a record written before the counts existed, and for a book whose
+    /// chapters hold no measurable text.
+    pub fn chars_left(&self, progress: Progress) -> Option<usize> {
+        if !self.counts_agree() {
+            return None;
+        }
+        let total: usize = self.chapter_chars.iter().sum();
+        if total == 0 {
+            return None;
+        }
+        let behind: usize = self.chapter_chars.iter().take(progress.chapter_index).sum();
+        let chapter_chars = self
+            .chapter_chars
+            .get(progress.chapter_index)
+            .copied()
+            .unwrap_or(0);
+        let chapter_sentences = self
+            .sentence_counts
+            .get(progress.chapter_index)
+            .copied()
+            .unwrap_or(0);
+        let within = chapter_chars
+            .saturating_mul(progress.sentence_index.min(chapter_sentences))
+            .checked_div(chapter_sentences)
+            .unwrap_or(0);
+        Some(total.saturating_sub(behind.saturating_add(within)))
     }
 }
 
@@ -451,6 +497,7 @@ mod tests {
             content_hash: hash.to_string(),
             chapter_count: 10,
             sentence_counts: Vec::new(),
+            chapter_chars: Vec::new(),
             added_at: 0,
         }
     }
@@ -461,6 +508,17 @@ mod tests {
             id: id.to_string(),
             chapter_count: counts.len(),
             sentence_counts: counts.to_vec(),
+            ..record(id, "hash")
+        }
+    }
+
+    /// A record carrying both lists: sentences and characters, per chapter.
+    fn shaped(id: &str, sentences: &[usize], chars: &[usize]) -> BookRecord {
+        BookRecord {
+            id: id.to_string(),
+            chapter_count: sentences.len(),
+            sentence_counts: sentences.to_vec(),
+            chapter_chars: chars.to_vec(),
             ..record(id, "hash")
         }
     }
@@ -769,5 +827,66 @@ mod tests {
             library.books[0].sentence_counts.is_empty(),
             "absent, not invented"
         );
+    }
+
+    #[test]
+    fn time_left_shrinks_as_the_reader_moves() {
+        let book = shaped("timed-1111", &[10, 10], &[1000, 1000]);
+        let start = Progress::default();
+        assert_eq!(book.chars_left(start), Some(2000), "whole book ahead");
+        let halfway_in = Progress {
+            chapter_index: 1,
+            sentence_index: 5,
+            updated_at: 0,
+        };
+        assert_eq!(
+            book.chars_left(halfway_in),
+            Some(500),
+            "a whole chapter plus half of this one is behind"
+        );
+    }
+
+    #[test]
+    fn a_finished_book_has_nothing_left() {
+        let book = shaped("timed-2222", &[4, 4], &[400, 400]);
+        let finished = Progress {
+            chapter_index: 1,
+            sentence_index: 4,
+            updated_at: 0,
+        };
+        assert_eq!(book.chars_left(finished), Some(0));
+    }
+
+    #[test]
+    fn a_position_past_the_end_leaves_nothing_rather_than_a_debt() {
+        let book = shaped("timed-3333", &[4], &[400]);
+        let past = Progress {
+            chapter_index: 9,
+            sentence_index: 99,
+            updated_at: 0,
+        };
+        assert_eq!(book.chars_left(past), Some(0), "saturating, never negative");
+    }
+
+    #[test]
+    fn a_record_without_characters_has_no_estimate() {
+        let book = sized("counts-only-4444", &[10, 10]);
+        assert_eq!(
+            book.chars_left(Progress::default()),
+            None,
+            "1.3.0's index knows sentences, not length"
+        );
+    }
+
+    #[test]
+    fn a_count_list_that_disagrees_with_the_book_has_no_estimate() {
+        let book = shaped("odd-5555", &[10, 10], &[1000]);
+        assert_eq!(book.chars_left(Progress::default()), None);
+    }
+
+    #[test]
+    fn a_book_with_no_text_has_no_estimate() {
+        let book = shaped("empty-6666", &[0, 0], &[0, 0]);
+        assert_eq!(book.chars_left(Progress::default()), None);
     }
 }

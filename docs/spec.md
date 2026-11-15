@@ -94,6 +94,14 @@ on the tagged tree.
   `tests/cli_ls.rs::ls_falls_back_to_chapter_granularity_for_an_old_record`,
   `tests/cli_read.rs::read_fills_in_sentence_counts_for_a_library_added_before_them`,
   `src/store.rs::tests::a_percentage_lands_inside_the_chapter_the_reader_is_in`
+- AC-19: `ls` and the opening line of `read` say how much listening is left, estimated from
+  the characters stored per chapter at the measured 16.1 characters per second and scaled by
+  the configured speed; an index written before those counts existed shows no estimate rather
+  than a wrong one, and a finished book reads `done` —
+  `tests/cli_ls.rs::ls_reports_how_long_is_left`,
+  `tests/cli_ls.rs::ls_omits_the_estimate_for_an_index_written_before_the_counts`,
+  `src/store.rs::tests::time_left_shrinks_as_the_reader_moves`,
+  `src/estimate.rs::tests::a_sentence_takes_its_characters_at_the_measured_rate`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -105,7 +113,8 @@ two binaries and asserts the code.
 New files only, all under XDG paths; nothing outside them is touched.
 
 - `$XDG_DATA_HOME/libretto/library.json` — `version`, `books[]` (`id`, `title`, `author`,
-  `source_path`, `content_hash`, `chapter_count`, `sentence_counts`, `added_at`),
+  `source_path`, `content_hash`, `chapter_count`, `sentence_counts`, `chapter_chars`,
+  `added_at`),
   `progress{}` per book
   (`chapter_index`, `sentence_index`, `updated_at`), `last_read`. File `0600`, directory
   `0700`, written through temp + rename, capped at 8 MiB before parsing.
