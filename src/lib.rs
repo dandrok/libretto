@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cache;
+pub mod captions;
 pub mod config;
 pub mod doctor;
 pub mod epub;
