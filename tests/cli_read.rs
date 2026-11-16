@@ -13,6 +13,12 @@ use libretto::text::sentences;
 
 const AUDIO: &[u8] = b"ID3\x04\x00\x00fake-mp3";
 
+/// One row of the wordmark, exactly as it is drawn. A fragment of the mark rather than a
+/// shape-less word, so the terminal test proves *this* mark arrives and the pipe test proves
+/// it does not — an absence assertion on a string the art no longer contains passes while
+/// asserting nothing.
+const WORDMARK_ROW: &str = "╚══════╝╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝";
+
 fn sentence_count(path: &std::path::Path) -> usize {
     let book = libretto::epub::load(path).expect("fixture loads");
     book.chapters
@@ -364,7 +370,7 @@ fn a_piped_read_stays_plain_and_quiet_is_accepted() {
         "a pipe must not receive escapes: {status:?}"
     );
     assert!(
-        !status.contains("_ _ _"),
+        !status.contains(WORDMARK_ROW),
         "no wordmark away from a terminal: {status:?}"
     );
     assert!(
@@ -385,6 +391,38 @@ fn a_piped_read_stays_plain_and_quiet_is_accepted() {
     assert!(
         !String::from_utf8_lossy(&quiet.stderr).contains('\x1b'),
         "--quiet stays plain"
+    );
+}
+
+/// AC-16: the wordmark is the terminal's, it is drawn exactly once per run, and it is the
+/// mark the README shows. A pipe never sees it (the test above proves that side), so this is
+/// the positive control — without it a mark that stopped being drawn would still pass.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_a_terminal_the_wordmark_is_drawn_once() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "marked.epub",
+        Some("Marked Book"),
+        &[("One", "First sentence here.")],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    let endpoint = fake.endpoint();
+    let raw = common::under_pty(
+        &sandbox,
+        &format!("read marked --endpoint '{endpoint}' --sentences 1"),
+    );
+
+    assert_eq!(
+        raw.matches(WORDMARK_ROW).count(),
+        1,
+        "the wordmark reaches the terminal once: {raw:?}"
+    );
+    assert!(
+        raw.contains("██╗     ██╗██████╗"),
+        "its opening row is drawn too, not just one line of it: {raw:?}"
     );
 }
 

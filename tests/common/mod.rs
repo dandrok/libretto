@@ -192,3 +192,43 @@ impl Default for Sandbox {
         Self::new()
     }
 }
+
+/// Run the binary under a real pty, which is the only way `stderr` counts as a terminal.
+///
+/// `script` is util-linux's (`-qec`), so this helper is Linux-only rather than pretending
+/// about macOS. A missing `script` is a panic that names the reason: skipping the proof
+/// silently would be indistinguishable from one that passed.
+///
+/// The player is a script that sleeps, because `--player true` exits before the first frame
+/// is ever drawn — a one-sentence run under it renders nothing at all.
+#[cfg(target_os = "linux")]
+pub fn under_pty(sandbox: &Sandbox, args: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    if !Path::new("/usr/bin/script").exists() && !Path::new("/bin/script").exists() {
+        panic!(
+            "no `script` binary: this proof cannot run, and skipping it silently would hide that"
+        );
+    }
+
+    let root = sandbox.root().display();
+    let player = sandbox.root().join("slow-player");
+    if !player.exists() {
+        std::fs::write(&player, "#!/bin/sh\nsleep 1\n").expect("player script");
+        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let inner = format!(
+        "env XDG_DATA_HOME='{root}/data' XDG_CACHE_HOME='{root}/cache' \
+             XDG_CONFIG_HOME='{root}/config' HOME='{root}' COLUMNS=60 \
+             '{}' {args} --player '{}' --width 60",
+        env!("CARGO_BIN_EXE_libretto"),
+        player.display(),
+    );
+    let output = Command::new("script")
+        .args(["-qec", &inner, "/dev/null"])
+        .output()
+        .expect("run under a pty");
+    String::from_utf8_lossy(&output.stdout).to_string()
+}

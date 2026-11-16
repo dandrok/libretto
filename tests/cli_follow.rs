@@ -117,41 +117,8 @@ fn follow_accepts_the_same_arguments_as_read() {
 }
 
 /// The one thing a pipe cannot show: that a terminal gets the block at all, and that a
-/// block taller than one row is replaced rather than printed again underneath. `script`
-/// gives the child a pty, which is the only way `stderr` counts as a terminal; it is
-/// util-linux's, so this proof lives on Linux rather than pretending about macOS.
-#[cfg(target_os = "linux")]
-fn under_pty(sandbox: &Sandbox, args: &str) -> String {
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
-    use std::process::Command;
-
-    if !Path::new("/usr/bin/script").exists() && !Path::new("/bin/script").exists() {
-        panic!(
-            "no `script` binary: this proof cannot run, and skipping it silently would hide that"
-        );
-    }
-
-    let root = sandbox.root().display();
-    let player = sandbox.root().join("slow-player");
-    if !player.exists() {
-        std::fs::write(&player, "#!/bin/sh\nsleep 1\n").expect("player script");
-        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    let inner = format!(
-        "env XDG_DATA_HOME='{root}/data' XDG_CACHE_HOME='{root}/cache' \
-             XDG_CONFIG_HOME='{root}/config' HOME='{root}' COLUMNS=60 \
-             '{}' {args} --player '{}' --width 60",
-        env!("CARGO_BIN_EXE_libretto"),
-        player.display(),
-    );
-    let output = Command::new("script")
-        .args(["-qec", &inner, "/dev/null"])
-        .output()
-        .expect("run under a pty");
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
+/// block taller than one row is replaced rather than printed again underneath. The pty
+/// comes from `common::under_pty`.
 #[cfg(target_os = "linux")]
 #[test]
 fn on_a_terminal_follow_draws_the_sentence_and_lights_a_word() {
@@ -165,7 +132,7 @@ fn on_a_terminal_follow_draws_the_sentence_and_lights_a_word() {
     sandbox.stdout_of(&["add", book.to_str().expect("path")]);
 
     let endpoint = fake.endpoint();
-    let raw = under_pty(
+    let raw = common::under_pty(
         &sandbox,
         &format!("follow screen --endpoint '{endpoint}' --sentences 1"),
     );

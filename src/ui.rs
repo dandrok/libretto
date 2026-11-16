@@ -46,12 +46,20 @@ const EMPTY_CELL: char = '░';
 /// What the breath becomes when the player is paused: a held sentence, not a silent one.
 const PAUSE_MARK: &str = "❚❚";
 
+/// Six rows, sixty-two columns, drawn with full blocks and box drawing — the only family of
+/// glyphs that fills its cell on both axes, so the letters close up at any size and at any
+/// downscale. Two earlier marks were tried and both failed the same way: `figlet small` and
+/// `figlet standard` draw with `_`, `/` and `|`, and an underscore sits mid-cell in a monospace
+/// face, so the art read as a row of detached dashes in the very font the README records in.
+/// A rendering was checked by eye, not just measured: a mark that fits and cannot be read is
+/// worse than a wide one.
 const WORDMARK: &str = "\
- _ _ _            _   _
-| (_) |__ _ _ ___| |_| |_ ___
-| | | '_ \\ '_/ -_)  _|  _/ _ \\
-|_|_|_.__/_| \\___|\\__|\\__\\___/
-";
+██╗     ██╗██████╗ ██████╗ ███████╗████████╗████████╗ ██████╗
+██║     ██║██╔══██╗██╔══██╗██╔════╝╚══██╔══╝╚══██╔══╝██╔═══██╗
+██║     ██║██████╔╝██████╔╝█████╗     ██║      ██║   ██║   ██║
+██║     ██║██╔══██╗██╔══██╗██╔══╝     ██║      ██║   ██║   ██║
+███████╗██║██████╔╝██║  ██║███████╗   ██║      ██║   ╚██████╔╝
+╚══════╝╚═╝╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝      ╚═╝    ╚═════╝";
 
 /// Where playback is now, asked once per frame. `None` when that instant has no position
 /// — before the player has answered, or for a player with no IPC socket at all.
