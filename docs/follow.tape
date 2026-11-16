@@ -9,9 +9,9 @@
 # Sizing: `--width 52` keeps the block at 54 columns counting its indent, but the closing line is
 # 62, so the window is sized for 64: ~1130 px plus padding, 1180. A wrapped row is what breaks the
 # in-place redraw, and a wrapped closing line looks like a bug in a still. The height has to hold the
-# tallest frame: header, four-row wordmark, previous row, up to four rows of the current sentence,
-# the next row and the bar — 12 rows at ~31 px — plus the command echo, the stop line and the
-# prompt: 17 rows at ~31 px is 530, so 780 also survives the frames where the block is at its
+# tallest frame: header, six-row wordmark, previous row, up to four rows of the current sentence,
+# the next row and the bar — 14 rows at ~31 px — plus the command echo, the stop line and the
+# prompt: 19 rows at ~31 px is 590, so 780 also survives the frames where the block is at its
 # tallest without scrolling the header off the top.
 
 Output docs/follow.gif

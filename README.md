@@ -72,6 +72,11 @@ stopped at chapter 9, sentence 3/287 (3 played, 0 from cache)
 `libretto` with no arguments resumes the last book you read. `libretto ls` shows what is in
 the library and how far each book is; any unique prefix of the id works (`libretto read grok`).
 
+**A slow book says so.** Hashing and parsing happen before anything can name the book, and a PDF
+is converted whole by `pdftotext` on every run — seconds for a big one. On a terminal the
+wordmark goes out immediately and a line under it says what is being read, with a mark that
+keeps moving; it is gone once the book is open. A book that opens quickly never shows it.
+
 [Back to contents](#contents)
 
 ## Following along
