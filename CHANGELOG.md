@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.10.0](https://github.com/dandrok/libretto/compare/v1.9.1...v1.10.0) - 2026-11-16
+
+### Added
+
+- *(ui)* a wordmark that reads, and a test that proves it reaches the terminal
+
 ## [1.9.1](https://github.com/dandrok/libretto/compare/v1.9.0...v1.9.1) - 2026-11-15
 
 ### Other
