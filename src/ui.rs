@@ -28,9 +28,16 @@ const CLEAR: &str = "\r\x1b[2K";
 /// bytes; drawing less often than the words change is what a reader sees as lag, so the tick
 /// is short and identical frames are dropped.
 const TICK: Duration = Duration::from_millis(30);
-const SWEEP_STEP: Duration = Duration::from_millis(16);
-const SWEEP_RELEASE: Duration = Duration::from_millis(120);
-const SWEEP_CELLS: usize = 28;
+/// The waiting mark's own pace: fast enough to read as motion, slow enough not to flicker.
+const WAITING_STEP: Duration = Duration::from_millis(90);
+/// How long a wait has to last before it is worth drawing at all. An EPUB is parsed in
+/// milliseconds, and a line that appears and vanishes inside a single frame is read as a
+/// glitch rather than as progress; a PDF is seconds, and then the line is the whole point.
+const WAITING_DELAY: Duration = Duration::from_millis(150);
+/// Ten frames of a braille spinner — the one animation in the program that means "working"
+/// rather than "audio is playing". Braille because every mono face on this machine carries
+/// the block (U+2800–U+28FF); the quarter circles fall back to another font and change size.
+const WAITING: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 /// One breath: the circle opens and closes. Six frames, symmetric on purpose.
 const BREATH: [char; 6] = ['◡', '∘', '⊙', '◎', '⊙', '∘'];
 /// Ticks per breath frame (3 × 90ms ≈ 270ms), so one breath lasts about 1.6s.
@@ -182,14 +189,39 @@ impl Ui {
         self.interactive
     }
 
-    /// The wordmark, then one sweep that fills left to right and clears itself.
-    /// About half a second, once per run: enough to read, short enough to ignore.
-    pub fn splash(&self) {
+    /// The wordmark, and — if the work outlasts a moment — a line saying what it waits for.
+    ///
+    /// The wordmark is printed first because opening a book can take seconds before any of
+    /// the book is known: `pdftotext` converts the whole file on every run, and the opening
+    /// header only exists once the chapters do. A terminal with nothing on it reads as a hang.
+    ///
+    /// The line itself waits: on a fast open it is never drawn, because a row that blinks in
+    /// and out is worse than no row at all.
+    pub fn opening(&self, label: &str) -> Working {
+        let mut working = Working::silent();
         if !self.interactive {
-            return;
+            return working;
         }
         let mut err = io::stderr();
+        self.wordmark(&mut err);
+        let _ = err.flush();
+        working.start(label, self.colour, self.width);
+        working
+    }
 
+    /// The waiting line without the wordmark — for a command with no live view of its own.
+    /// `add` parses the file exactly as `read` does, but an import does not need four rows of
+    /// banner over it.
+    pub fn waiting(&self, label: &str) -> Working {
+        let mut working = Working::silent();
+        if self.interactive {
+            working.start(label, self.colour, self.width);
+        }
+        working
+    }
+
+    /// Four rows of dim art, once per run.
+    fn wordmark(&self, err: &mut impl Write) {
         let _ = writeln!(err);
         for line in WORDMARK.lines() {
             if self.colour {
@@ -198,13 +230,6 @@ impl Ui {
                 let _ = writeln!(err, "  {line}");
             }
         }
-
-        for filled in 0..=SWEEP_CELLS {
-            self.write_partial(&mut err, &sweep(filled, self.colour));
-            thread::sleep(SWEEP_STEP);
-        }
-        thread::sleep(SWEEP_RELEASE);
-        self.write_partial(&mut err, CLEAR);
     }
 
     /// Draw the first frame before any sentence has played, so the breath starts
@@ -394,6 +419,85 @@ impl Paint {
 pub struct Pulse {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+}
+
+/// The waiting line, alive for as long as the work it describes.
+///
+/// On a terminal it owns one row under the wordmark and gives it back empty when it is
+/// dropped, so whatever is printed next starts where the line was. Off a terminal it owns
+/// nothing and writes nothing: a pipe's bytes are the spec's, and the wordmark and the
+/// spinner are the terminal's flourish alone.
+pub struct Working {
+    label: Arc<Mutex<String>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Working {
+    /// A guard that draws nothing. Constructed for pipes, `--quiet`, and tests.
+    fn silent() -> Self {
+        Self {
+            label: Arc::new(Mutex::new(String::new())),
+            stop: Arc::new(AtomicBool::new(true)),
+            handle: None,
+        }
+    }
+
+    /// Change what the line says — the phases of opening a book are not known up front.
+    pub fn say(&self, label: impl Into<String>) {
+        if let Ok(mut slot) = self.label.lock() {
+            *slot = label.into();
+        }
+    }
+
+    fn start(&mut self, label: &str, colour: bool, width: usize) {
+        self.say(label);
+        let text = Arc::clone(&self.label);
+        let stop = Arc::clone(&self.stop);
+        stop.store(false, Ordering::Relaxed);
+        let handle = thread::spawn(move || {
+            let mut err = io::stderr();
+            // Nothing is drawn until the wait has lasted long enough to be worth saying.
+            let deadline = Instant::now() + WAITING_DELAY;
+            while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                thread::sleep(remaining.min(WAITING_STEP));
+            }
+            let mut tick = 0;
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let label = match text.lock() {
+                    Ok(slot) => slot.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                };
+                let frame = working_line(&label, tick, colour, width);
+                if write!(err, "{frame}").is_err() || err.flush().is_err() {
+                    break;
+                }
+                tick += 1;
+                thread::sleep(WAITING_STEP);
+            }
+        });
+        self.handle = Some(handle);
+    }
+}
+
+impl Drop for Working {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+            // Leave an empty row behind: the header that follows is written by another
+            // stream, in another place, and must not land on a half-erased line.
+            let mut err = io::stderr();
+            let _ = write!(err, "{CLEAR}");
+            let _ = err.flush();
+        }
+    }
 }
 
 impl Drop for Pulse {
@@ -588,13 +692,18 @@ pub fn bar_line_with(
     cut(format!("{CLEAR}  {track} {pct}  {chosen}"), width)
 }
 
-fn sweep(filled: usize, colour: bool) -> String {
-    let line = "▔".repeat(filled.min(SWEEP_CELLS));
-    if colour {
-        format!("{CLEAR}  {ACCENT}{line}{RESET}")
-    } else {
-        format!("{CLEAR}  {line}")
+/// One frame of the waiting line: a spinner, then what is being waited for.
+///
+/// The line is the terminal's, so it stays inside the width it was handed — a wrapped row
+/// would put the next write in the wrong place. A label too long for the row is cut, and the
+/// mark is drawn first precisely so that the cut never takes it away.
+pub fn working_line(label: &str, tick: usize, colour: bool, width: usize) -> String {
+    let mark = WAITING[tick % WAITING.len()];
+    let coloured = format!("{CLEAR}  {ACCENT}{mark}{RESET} {DIM}{label}{RESET}");
+    if colour && visible_columns(&coloured) <= width {
+        return coloured;
     }
+    cut(format!("{CLEAR}  {mark} {label}"), width)
 }
 
 /// A slow breath: `◡ ∘ ⊙ ◎ ⊙ ∘` over about 1.6 seconds.
@@ -688,6 +797,45 @@ mod tests {
             !visible.contains('█') && !visible.contains('░'),
             "and below forty columns a cell per chapter is a sliver, not information: {visible:?}"
         );
+    }
+
+    #[test]
+    fn the_waiting_line_names_the_work_and_keeps_moving() {
+        let first = working_line("reading a 9.8 MB PDF", 0, false, 60);
+        let second = working_line("reading a 9.8 MB PDF", 1, false, 60);
+        assert!(
+            first.contains("reading a 9.8 MB PDF"),
+            "the line says what is being waited for: {first:?}"
+        );
+        assert!(
+            first.contains(WAITING[0]) && second.contains(WAITING[1]),
+            "the mark advances, so a slow parse is visibly alive: {first:?} / {second:?}"
+        );
+        assert!(visible_columns(&first) <= 60, "{first:?}");
+
+        // A label longer than the row is cut, and the cut never takes the mark: a spinner
+        // that scrolls off the end of a long path is a line that looks stuck.
+        let long = working_line(&"x".repeat(200), 0, false, 40);
+        assert!(visible_columns(&long) <= 40, "{long:?}");
+        assert!(
+            long.contains(WAITING[0]),
+            "the mark survives the cut: {long:?}"
+        );
+
+        // The coloured form is only used when it fits whole: cutting it by characters would
+        // slice an escape sequence in half.
+        let coloured = working_line("reading a 9.8 MB PDF", 0, true, 60);
+        assert!(
+            coloured.contains(ACCENT) && coloured.contains("reading"),
+            "{coloured:?}"
+        );
+        assert!(visible_columns(&coloured) <= 60, "{coloured:?}");
+        let tight = working_line("reading a 9.8 MB PDF", 0, true, 12);
+        assert!(
+            !tight.contains(ACCENT),
+            "no half-escape on a narrow row: {tight:?}"
+        );
+        assert!(visible_columns(&tight) <= 12, "{tight:?}");
     }
 
     #[test]

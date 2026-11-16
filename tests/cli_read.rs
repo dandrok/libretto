@@ -426,6 +426,116 @@ fn on_a_terminal_the_wordmark_is_drawn_once() {
     );
 }
 
+/// Put a `pdftotext` on the sandbox's `PATH` that waits before doing the real thing. The
+/// parse is real — only slow — which is exactly the machine the line is for.
+#[cfg(target_os = "linux")]
+fn a_slow_pdftotext(sandbox: &Sandbox, milliseconds: u32) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let real = std::process::Command::new("sh")
+        .args(["-c", "command -v pdftotext"])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    if real.is_empty() {
+        eprintln!("skipping: pdftotext not installed");
+        return false;
+    }
+    let bin = sandbox.root().join("bin");
+    std::fs::create_dir_all(&bin).expect("stub dir");
+    let stub = bin.join("pdftotext");
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nsleep {}\nexec '{real}' \"$@\"\n",
+            milliseconds as f64 / 1000.0
+        ),
+    )
+    .expect("stub script");
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    true
+}
+
+/// AC-24: a wait long enough to notice is named, and the line is given back before the header
+/// prints. Without it the reader stares at a blank terminal for the seconds `pdftotext` takes.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_a_terminal_a_slow_open_is_named_and_erased() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let pdf = format!(
+        "{}/tests/fixtures/two-chapters.pdf",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    sandbox.stdout_of(&["add", &pdf]);
+    if !a_slow_pdftotext(&sandbox, 400) {
+        return;
+    }
+
+    let endpoint = fake.endpoint();
+    let raw = common::under_pty(
+        &sandbox,
+        &format!("read two-chapters --endpoint '{endpoint}' --sentences 1"),
+    );
+
+    let header = raw
+        .find("— chapter")
+        .unwrap_or_else(|| panic!("the opening header is printed: {raw:?}"));
+    // The mark is drawn before the label, so the line is found from the mark backwards.
+    let drawn = raw[..header]
+        .rfind('⠋')
+        .unwrap_or_else(|| panic!("the waiting mark is drawn on a terminal: {raw:?}"));
+    let line = &raw[drawn..header];
+    assert!(
+        line.contains("reading a ") && line.contains("PDF"),
+        "the line names what is being read: {line:?}"
+    );
+    // The erase has to land before the header row is written: the property is that the row the
+    // header occupies carries none of the waiting line. Checking that the slice merely
+    // *contains* a clear would pass on the frames' own row resets, which every redraw carries.
+    let erased_at = raw[..header].rfind("\x1b[2K").unwrap_or_else(|| {
+        panic!(
+            "the header row starts with a row reset: {:?}",
+            &raw[..header.min(400)]
+        )
+    });
+    let row = &raw[erased_at + 4..header];
+    assert!(
+        !row.contains("reading a ") && !row.contains('⠇'),
+        "the waiting line is gone before the header row is written: {row:?}"
+    );
+}
+
+/// AC-24: a quick open draws no line at all. A row that appears and vanishes inside one frame
+/// reads as a rendering fault, which is what the delay in `WAITING_DELAY` prevents.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_a_terminal_a_quick_open_draws_no_waiting_line() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "quick.epub",
+        Some("Quick Book"),
+        &[("One", "First sentence here.")],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    let endpoint = fake.endpoint();
+    let raw = common::under_pty(
+        &sandbox,
+        &format!("read quick --endpoint '{endpoint}' --sentences 1"),
+    );
+
+    assert!(
+        raw.contains("██╗"),
+        "the wordmark still goes out at once: {raw:?}"
+    );
+    assert!(
+        !raw.contains("reading a "),
+        "an open this fast gets no line, so nothing flashes: {raw:?}"
+    );
+}
+
 #[test]
 fn read_fills_in_sentence_counts_for_a_library_added_before_them() {
     let sandbox = Sandbox::new();

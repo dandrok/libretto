@@ -201,6 +201,9 @@ impl Default for Sandbox {
 ///
 /// The player is a script that sleeps, because `--player true` exits before the first frame
 /// is ever drawn — a one-sentence run under it renders nothing at all.
+///
+/// `$PATH` starts with `<root>/bin`, so a test that needs a slow or blocked external tool puts
+/// a stub there instead of reaching into the program.
 #[cfg(target_os = "linux")]
 pub fn under_pty(sandbox: &Sandbox, args: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
@@ -222,6 +225,7 @@ pub fn under_pty(sandbox: &Sandbox, args: &str) -> String {
     let inner = format!(
         "env XDG_DATA_HOME='{root}/data' XDG_CACHE_HOME='{root}/cache' \
              XDG_CONFIG_HOME='{root}/config' HOME='{root}' COLUMNS=60 \
+             PATH='{root}/bin':$PATH \
              '{}' {args} --player '{}' --width 60",
         env!("CARGO_BIN_EXE_libretto"),
         player.display(),
