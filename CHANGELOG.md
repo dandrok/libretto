@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.11.0](https://github.com/dandrok/libretto/compare/v1.10.0...v1.11.0) - 2026-11-16
+
+### Added
+
+- *(ui)* say what the wait is for while a book opens
+
 ## [1.10.0](https://github.com/dandrok/libretto/compare/v1.9.1...v1.10.0) - 2026-11-16
 
 ### Added
