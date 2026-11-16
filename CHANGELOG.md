@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.11.1](https://github.com/dandrok/libretto/compare/v1.11.0...v1.11.1) - 2026-11-16
+
+### Other
+
+- *(demo)* re-record both takes for the new wordmark, and say what a slow open does
+
 ## [1.11.0](https://github.com/dandrok/libretto/compare/v1.10.0...v1.11.0) - 2026-11-16
 
 ### Added
