@@ -82,6 +82,7 @@ on the tagged tree.
   a slow breath (◡ ∘ ⊙ ◎ ⊙ ∘) that moves only while the player holds a sentence; the same run piped emits the
   plain `\r` status line and no escape sequences —
   `tests/cli_read.rs::a_piped_read_stays_plain_and_quiet_is_accepted`,
+  `tests/cli_read.rs::on_a_terminal_the_wordmark_is_drawn_once`,
   `src/ui.rs::tests::the_plain_line_matches_what_scripts_have_always_seen`
 - AC-17: `--quiet` suppresses the wordmark, the bar and the breath even on a terminal, and
   changes no exit code —
