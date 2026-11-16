@@ -139,6 +139,18 @@ on the tagged tree.
   `src/play.rs::tests::the_words_of_a_sentence_reach_the_caller_before_it_plays`,
   `src/tts.rs::tests::a_versioned_endpoint_has_a_captioned_sibling`,
   `src/captions.rs::tests::punctuation_of_its_own_belongs_to_the_word_before_it`
+- AC-24: opening a book on a terminal says what it is waiting for. The wordmark appears at
+  once, before anything about the book is known, and — when the wait outlasts 150 ms — a single
+  line under it names the file's kind and size with a mark that advances while the file is
+  hashed and parsed, which is seconds for a PDF because `pdftotext` converts it whole on every
+  run. A quicker open draws no line at all, so nothing flashes. `add` shows the line without
+  the wordmark, because an import has no live view of its own. The line is gone before the
+  header row is written, so it never becomes part of the screen; a pipe and `--quiet` see the
+  wordmark, the line and the mark not at all —
+  `tests/cli_read.rs::on_a_terminal_a_slow_open_is_named_and_erased`,
+  `tests/cli_read.rs::on_a_terminal_a_quick_open_draws_no_waiting_line`,
+  `tests/cli_read.rs::on_a_terminal_the_wordmark_is_drawn_once`,
+  `src/ui.rs::tests::the_waiting_line_names_the_work_and_keeps_moving`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,

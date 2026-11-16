@@ -54,7 +54,7 @@ fn run() -> Result<(), AppError> {
     let cli = Cli::parse();
     let store = Store::open().map_err(AppError::Store)?;
     match cli.command {
-        Some(Command::Add { path }) => add(&store, &path),
+        Some(Command::Add { path }) => add(&store, &path, cli.quiet),
         Some(Command::Ls) => {
             // The estimate follows the configured speed; a broken config must not turn
             // listing a library into a failure, so it falls back to the default.
@@ -140,6 +140,27 @@ fn load_book(path: &Path) -> Result<epub::Book, AppError> {
     })
 }
 
+/// What the waiting line says while a book is being read: its kind, and its size.
+///
+/// The size is the honest predictor of the wait — an EPUB is unzipped in milliseconds, while
+/// a PDF is converted whole by `pdftotext` on every run — so the number the reader waits on is
+/// the number they are shown.
+fn describe_book(path: &Path) -> String {
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let kind = if extension == "pdf" { "PDF" } else { "EPUB" };
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() >= 1_000_000 => {
+            format!("reading a {:.1} MB {kind}", meta.len() as f64 / 1_000_000.0)
+        }
+        Ok(meta) => format!("reading a {} KB {kind}", (meta.len() / 1000).max(1)),
+        // The file may be gone: the check that says so comes next, and names the reason.
+        Err(_) => format!("reading the {kind}"),
+    }
+}
+
 /// Sentences per chapter, and the characters they hold, counted with the same
 /// splitter `read` uses — so the percentage lands on the sentence that will be
 /// spoken and the time estimate describes the text that will be read out.
@@ -179,11 +200,16 @@ fn chars_left_in_book(
     Some(total.saturating_sub(behind.saturating_add(spoken)))
 }
 
-fn add(store: &Store, path: &Path) -> Result<(), AppError> {
+fn add(store: &Store, path: &Path, quiet: bool) -> Result<(), AppError> {
+    // Parsing a PDF is seconds of work, and it happens before anything about the book is
+    // known: the line under the prompt is the only thing that can say so. No wordmark here —
+    // an import does not need four rows of banner over it.
+    let working = Ui::new(quiet).waiting(&describe_book(path));
     let hash = store::hash_file(path)?;
     let mut library = store.load()?;
 
     if let Some(existing) = library.find_by_hash(&hash) {
+        drop(working);
         println!(
             "already in library: {} — {}",
             existing.id,
@@ -193,6 +219,7 @@ fn add(store: &Store, path: &Path) -> Result<(), AppError> {
     }
 
     let book = load_book(path)?;
+    drop(working);
     let id = store::make_id(&book.title, &hash);
     let source_path = std::fs::canonicalize(path)
         .unwrap_or_else(|_| path.to_path_buf())
@@ -317,10 +344,14 @@ fn read(
     }
 
     let book_path = PathBuf::from(&record.source_path);
+    // The wordmark, then the wait by name: hashing and parsing this file happen before the
+    // opening line can say which book it is, and on a PDF they are seconds.
+    let working = ui.opening(&describe_book(&book_path));
     // The path came out of the library file, so check it still is the book that
     // was indexed: a tampered library must not turn into "read me that file".
     verify_unchanged(&book_path, &record)?;
     let book = load_book(&book_path)?;
+    drop(working);
     let progress = library.progress_of(&record.id);
 
     // A library written before 1.3.0 carries no per-chapter sentence counts, so
@@ -420,7 +451,6 @@ fn read(
         sentences.len(),
         left
     );
-    ui.splash();
 
     let mut position = Progress {
         chapter_index,
