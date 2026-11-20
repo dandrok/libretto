@@ -64,6 +64,7 @@ fn run() -> Result<(), AppError> {
             list(&store, speed)
         }
         Some(Command::Rm { id }) => remove(&store, &id),
+        Some(Command::Refresh { id }) => refresh(&store, &id, cli.quiet),
         Some(Command::Read(args)) => {
             let (request, overrides) = split(args, cli.sync_offset);
             read(&store, request, overrides, cli.quiet, false, cli.width)
@@ -281,6 +282,66 @@ fn remove(store: &Store, id: &str) -> Result<(), AppError> {
     let removed = library.remove(id)?;
     store.save(&library)?;
     println!("removed {} — {}", removed.id, printable(&removed.title));
+    Ok(())
+}
+
+/// `libretto refresh`: the index is rebuilt from the file on disk, in place.
+///
+/// The two refusals around it are both right — `read` exits 4 because the index no longer
+/// describes the file, and `add` refuses the bytes because they are not the ones it
+/// imported — so without this the only way out is `rm` + `add`, which costs the position.
+/// The `id` is kept because it is the key the position is stored under, and the stored
+/// position is clamped to the new shape rather than trusted past its end.
+fn refresh(store: &Store, id: &str, quiet: bool) -> Result<(), AppError> {
+    let mut library = store.load()?;
+    let record = library.resolve(id)?.clone();
+    let path = PathBuf::from(&record.source_path);
+    let working = Ui::new(quiet).waiting(&describe_book(&path));
+    let hash = store::hash_file(&path)?;
+    if hash == record.content_hash {
+        drop(working);
+        println!("up to date: {} — {}", record.id, printable(&record.title));
+        return Ok(());
+    }
+    let book = load_book(&path)?;
+    drop(working);
+
+    let (sentence_counts, chapter_chars) = chapter_shape(&book);
+    let progress = library.progress_of(&record.id);
+    let chapter_index = progress
+        .chapter_index
+        .min(book.chapters.len().saturating_sub(1));
+    let sentence_index = progress
+        .sentence_index
+        .min(sentence_counts.get(chapter_index).copied().unwrap_or(0));
+
+    if let Some(slot) = library
+        .books
+        .iter_mut()
+        .find(|candidate| candidate.id == record.id)
+    {
+        slot.content_hash = hash;
+        slot.chapter_count = book.chapters.len();
+        slot.sentence_counts = sentence_counts;
+        slot.chapter_chars = chapter_chars;
+    }
+    library.progress.insert(
+        record.id.clone(),
+        Progress {
+            chapter_index,
+            sentence_index,
+            updated_at: store::now_seconds(),
+        },
+    );
+    store.save(&library)?;
+    println!(
+        "refreshed {} — {} ({} chapters, position ch {}/{})",
+        record.id,
+        printable(&record.title),
+        book.chapters.len(),
+        chapter_index + 1,
+        book.chapters.len()
+    );
     Ok(())
 }
 
@@ -666,7 +727,7 @@ impl fmt::Display for AppError {
             AppError::Config(error) => write!(f, "{error}"),
             AppError::BookChanged { path, reason } => write!(
                 f,
-                "{path}: {reason}; re-index it with `libretto add <path>`"
+                "{path}: {reason}; re-index it with `libretto refresh <id>`"
             ),
             AppError::Pdf(error) => write!(f, "{error}"),
             AppError::Unhealthy => write!(f, "one or more checks failed"),

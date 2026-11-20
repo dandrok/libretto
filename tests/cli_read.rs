@@ -300,8 +300,8 @@ fn a_changed_book_file_is_refused_instead_of_read() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("changed"), "says what happened: {stderr}");
     assert!(
-        stderr.contains("libretto add"),
-        "says how to fix it: {stderr}"
+        stderr.contains("libretto refresh"),
+        "says how to fix it without losing the position: {stderr}"
     );
     assert_eq!(fake.hits(), 0, "nothing is synthesized from the impostor");
 }
