@@ -32,6 +32,8 @@ In scope:
   being spoken underlined
 - bare `libretto` — resume the last book read
 - `libretto rm <id|prefix>` — remove an entry (never the source file)
+- `libretto refresh <id|prefix>` — re-index a book whose file changed since it was added,
+  keeping the position
 - `libretto doctor` — library, config, player, endpoint and cache in one report
 - Local OpenAI-compatible TTS (`http://127.0.0.1:8880/v1` by default), with a disk cache
 - Sentence and chapter skipping, and rewinding
@@ -151,6 +153,16 @@ on the tagged tree.
   `tests/cli_read.rs::on_a_terminal_a_quick_open_draws_no_waiting_line`,
   `tests/cli_read.rs::on_a_terminal_the_wordmark_is_drawn_once`,
   `src/ui.rs::tests::the_waiting_line_names_the_work_and_keeps_moving`
+- AC-25: a book whose source file changed since it was added is recoverable in place instead
+  of only by `rm` and `add`, which costs the position: `refresh <prefix>` rewrites the
+  record from the file on disk — chapters, sentence counts, character totals and the
+  content hash — keeps the book's `id`, and keeps the stored position with the chapter and
+  sentence indices clamped to the new index rather than read as the old one; the next `read`
+  opens it instead of exiting 4. Refreshing a file that did not change writes nothing and
+  exits 0, and an unknown id exits 1 as it does everywhere else —
+  `tests/cli_refresh.rs::refreshing_a_rewritten_book_keeps_the_position_and_reads_it`,
+  `tests/cli_refresh.rs::refreshing_an_unchanged_book_changes_nothing`,
+  `tests/cli_refresh.rs::refresh_on_an_unknown_id_exits_1`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -208,6 +220,9 @@ Playback and synthesis:
   is clamped rather than treated as an error
 - a second reader on the same library exits 5; a lock left by a dead pid is recovered
 - a corrupt library is reported with its path and never overwritten (exit 6)
+- a changed source file is refused with exit 4 until it is refreshed; `refresh` never
+  deletes the entry, never changes the `id` the position is keyed on, and clamps a stored
+  position that now falls past the end rather than treating it as an error
 
 ## 6. Constraints
 
