@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.4](https://github.com/dandrok/libretto/compare/v1.12.3...v1.12.4) - 2026-11-20
+
+### Fixed
+
+- the live line is rewritten in place, not under itself
+
+### Other
+
+- refresh the README and re-record both demos
+
 ## [1.12.3](https://github.com/dandrok/libretto/compare/v1.12.2...v1.12.3) - 2026-11-20
 
 ### Fixed
