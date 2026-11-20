@@ -163,6 +163,14 @@ on the tagged tree.
   `tests/cli_refresh.rs::refreshing_a_rewritten_book_keeps_the_position_and_reads_it`,
   `tests/cli_refresh.rs::refreshing_an_unchanged_book_changes_nothing`,
   `tests/cli_refresh.rs::refresh_on_an_unknown_id_exits_1`
+- AC-26: footnote apparatus never reaches the speaker. The body of an `aside` — where EPUB 3
+  keeps a footnote — and the body of a noteref anchor (`a epub:type="noteref"`, which holds
+  the raised marker) are dropped the way `script` and `style` already are, so the sentence
+  that referenced the note is spoken whole instead of being cut in half by the note, and no
+  marker digit is spoken after the word it marked. A `sup` outside a noteref anchor is real
+  text, not apparatus, and stays —
+  `tests/split.rs::strip_html_drops_a_footnote_and_its_marker`,
+  `tests/split.rs::strip_html_keeps_a_superscript_that_is_not_a_note`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -193,6 +201,8 @@ EPUB:
 - chapters in spine order; running heads (the title reprinted at every chapter top) dropped;
   image-only chapters skipped and not counted; sentence splitting at 400 characters with
   `Mr.`, `Dr.`, `e.g.` and closing quotes respected
+- a footnote body (`aside`) and the raised marker of a noteref are not spoken: the note never
+  interrupts the sentence that referenced it, and a superscript that is not a note is kept
 - no OPF title → file stem, exit 0; DRM/encrypted → exit 4, nothing written; empty spine →
   exit 4, `no readable chapters`
 

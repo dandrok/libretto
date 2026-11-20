@@ -68,8 +68,15 @@ pub fn strip_html(html: &str) -> String {
         }
         let tag = read_tag(&mut chars);
         let name = tag_name(&tag);
-        if name == "script" || name == "style" {
+        if name == "script" || name == "style" || name == "aside" {
             skip_element_body(&mut chars, &name);
+            continue;
+        }
+        // A footnote is not prose: EPUB 3 keeps the note in an `aside` above and its
+        // raised marker in a noteref anchor, so both are skipped. A `sup` that stands
+        // on its own is an exponent, not apparatus, and is left alone.
+        if name == "a" && tag.contains("noteref") {
+            skip_element_body(&mut chars, "a");
             continue;
         }
         if BLOCK_TAGS.contains(&name.as_str()) {
