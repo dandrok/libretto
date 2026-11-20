@@ -267,7 +267,11 @@ impl Ui {
             *state = status;
             state.clone()
         };
-        self.write_partial(&mut err, &bar_line(&redrawn, tick, self.colour));
+        // Drawn through the same painter the breath uses. It alone knows where the frame
+        // stands, so a draw after the pulse has stopped rewrites that row instead of writing
+        // a second bar under the first.
+        let row = bar_line_with(&redrawn, tick, false, self.colour, self.width);
+        let _ = self.paint.draw(&mut err, &[row]);
     }
 
     /// Animate the breath until the returned guard is dropped — i.e. exactly
@@ -325,12 +329,11 @@ impl Ui {
     /// End the live line, so the summary that follows starts on a clean row.
     pub fn finish(&self) {
         let mut err = io::stderr();
-        let _ = writeln!(err);
-        let _ = err.flush();
-    }
-
-    fn write_partial(&self, err: &mut impl Write, text: &str) {
-        let _ = write!(err, "{text}");
+        // A painted frame parks the cursor on the row below it already; only a run that never
+        // painted (a pipe) stopped mid-line and needs the newline.
+        if self.paint.rows() == 0 {
+            let _ = writeln!(err);
+        }
         let _ = err.flush();
     }
 }
@@ -393,6 +396,11 @@ struct Paint {
 }
 
 impl Paint {
+    /// How many rows the last frame took, or 0 if nothing has been drawn yet.
+    fn rows(&self) -> usize {
+        self.drawn.load(Ordering::Relaxed)
+    }
+
     /// Move up over the previous frame, rewrite every row, and erase whatever is left
     /// below when the new frame is shorter than the old.
     fn draw(&self, out: &mut impl Write, frame: &[String]) -> io::Result<()> {
@@ -604,13 +612,6 @@ pub fn plain_line(status: &Status) -> String {
 /// The breath is ambient on purpose: it says "audio is
 /// happening", which is exactly what the player call proves. A waveform here
 /// would claim to follow the voice, and nothing in this program knows that.
-pub fn bar_line(status: &Status, tick: Option<usize>, colour: bool) -> String {
-    bar_line_with(status, tick, false, colour, 80)
-}
-
-/// [bar_line] with the player's own state: a breath while a sentence is being spoken, and
-/// a pause mark while it is held. Nothing here animates on a pause, because nothing is
-/// happening — that is the point of the mark.
 pub fn bar_line_with(
     status: &Status,
     tick: Option<usize>,
@@ -733,6 +734,25 @@ pub fn bar(done: usize, total: usize, cells: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_frame_rewrites_the_row_it_stands_on() {
+        // The painter is the only thing that knows where the frame is. A second writer
+        // assuming the cursor sat on the bar row is what drew a duplicate bar under it, so
+        // a redraw has to move up over the frame rather than on to the next row.
+        let paint = Paint::default();
+        let mut out: Vec<u8> = Vec::new();
+        paint.draw(&mut out, &["first".to_string()]).expect("drawn");
+        out.clear();
+        paint
+            .draw(&mut out, &["second".to_string()])
+            .expect("drawn");
+        let written = String::from_utf8_lossy(&out);
+        assert!(
+            written.starts_with("\x1b[1F"),
+            "moves back over the row it drew: {written:?}"
+        );
+    }
 
     fn status(sentence: usize, total: usize) -> Status {
         Status {
