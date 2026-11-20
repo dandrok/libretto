@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.3](https://github.com/dandrok/libretto/compare/v1.12.2...v1.12.3) - 2026-11-20
+
+### Fixed
+
+- announce an EPUB code listing instead of reading it
+
 ## [1.12.2](https://github.com/dandrok/libretto/compare/v1.12.1...v1.12.2) - 2026-11-20
 
 ### Fixed
