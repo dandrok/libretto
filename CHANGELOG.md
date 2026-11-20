@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.1](https://github.com/dandrok/libretto/compare/v1.12.0...v1.12.1) - 2026-11-20
+
+### Fixed
+
+- a footnote is not spoken into the sentence that referenced it
+
 ## [1.12.0](https://github.com/dandrok/libretto/compare/v1.11.1...v1.12.0) - 2026-11-20
 
 ### Added
