@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.2](https://github.com/dandrok/libretto/compare/v1.12.1...v1.12.2) - 2026-11-20
+
+### Fixed
+
+- announce a table instead of reading its cells
+
 ## [1.12.1](https://github.com/dandrok/libretto/compare/v1.12.0...v1.12.1) - 2026-11-20
 
 ### Fixed
