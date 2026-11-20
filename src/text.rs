@@ -79,6 +79,18 @@ pub fn strip_html(html: &str) -> String {
             skip_element_body(&mut chars, "a");
             continue;
         }
+        // A table read cell by cell is a column of bare numbers: `td` and `th` are block
+        // breaks, so the column names never reach the cells they explain. Say what the
+        // table is and how big it is instead, and drop the cells.
+        if name == "table" {
+            let body = take_element_body(&mut chars, "table");
+            if let Some(summary) = table_summary(&body) {
+                out.push('\n');
+                out.push_str(&summary);
+                out.push('\n');
+            }
+            continue;
+        }
         if BLOCK_TAGS.contains(&name.as_str()) {
             out.push('\n');
         }
@@ -111,22 +123,76 @@ fn tag_name(tag: &str) -> String {
 /// Skip everything up to and including the closing tag of a script or style
 /// element, so CSS and JavaScript never reach the speaker.
 fn skip_element_body(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, name: &str) {
+    let _ = take_element_body(chars, name);
+}
+
+/// Consume an element's body and return its raw markup, up to but not including its
+/// closing tag. The body is returned rather than dropped because a table has to be
+/// counted before it can be replaced by its shape.
+fn take_element_body(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, name: &str) -> String {
     let closing: Vec<char> = format!("</{name}").chars().collect();
     let mut recent: Vec<char> = Vec::with_capacity(closing.len());
+    let mut body = String::new();
     for c in chars.by_ref() {
+        body.push(c);
         recent.push(c.to_ascii_lowercase());
         if recent.len() > closing.len() {
             recent.remove(0);
         }
         if recent == closing {
+            // The tail is the ASCII closing tag, so this is a char boundary.
+            body.truncate(body.len().saturating_sub(closing.len()));
             for c in chars.by_ref() {
                 if c == '>' {
                     break;
                 }
             }
-            return;
+            return body;
         }
     }
+    body
+}
+
+/// "The caption, two rows, three columns" — one sentence in place of every cell.
+/// `None` for a table with no rows or no cells, because a shape it does not have
+/// is worse than silence.
+fn table_summary(body: &str) -> Option<String> {
+    let lower = body.to_ascii_lowercase();
+    let rows = lower.matches("<tr").count();
+    let columns = lower
+        .split("<tr")
+        .skip(1)
+        .map(|row| row.matches("<td").count() + row.matches("<th").count())
+        .max()
+        .unwrap_or(0);
+    if rows == 0 || columns == 0 {
+        return None;
+    }
+    let named = table_caption(body, &lower).unwrap_or_else(|| "Table".to_string());
+    Some(format!(
+        "{named}, {}, {}.",
+        counted(rows, "row", "rows"),
+        counted(columns, "column", "columns")
+    ))
+}
+
+/// The `caption` inside a table, as spoken text, with its own closing period removed so
+/// the sentence does not end twice.
+fn table_caption(body: &str, lower: &str) -> Option<String> {
+    let open = lower.find("<caption")?;
+    let body_start = open + lower[open..].find('>')? + 1;
+    let body_end = body_start + lower[body_start..].find("</caption")?;
+    let caption = strip_html(&body[body_start..body_end]);
+    let caption = caption.trim().trim_end_matches('.').to_string();
+    if caption.is_empty() {
+        None
+    } else {
+        Some(caption)
+    }
+}
+
+fn counted(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
 }
 
 fn decode_entities(input: &str) -> String {
