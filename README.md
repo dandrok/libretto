@@ -9,7 +9,7 @@ stopped.
 For the books you keep meaning to read — the 25-hour technical ones — while you cook, walk
 or fold laundry. No subscription, no cloud, no account: the voice runs on your own machine.
 
-![libretto reading a book: the wordmark, then one line per sentence with a bracketed meter, the chapter and sentence counters, the time left, and a slow breath while the audio plays](https://raw.githubusercontent.com/dandrok/libretto/main/docs/demo.gif)
+![libretto reading a book: the wordmark, then one line naming the book and the chapter, a bar with a percentage and the counters, and a slow breath while the audio plays](https://raw.githubusercontent.com/dandrok/libretto/main/docs/demo.gif)
 
 ## Contents
 
@@ -41,7 +41,7 @@ cd libretto && cargo install --path . --locked
 Check the build before you rely on it — `doctor` names whatever is missing:
 
 ```bash
-libretto --version    # libretto 1.9.0
+libretto --version    # libretto 1.12.2
 libretto doctor
 ```
 
@@ -128,6 +128,7 @@ a property of your machine, not of the book.
 | `libretto follow [id]` | the same, with the sentence and its current word on screen |
 | `libretto` | resume the last book you read |
 | `libretto rm <id>` | forget a book — the file itself is untouched |
+| `libretto refresh <id>` | the file changed since it was added: re-index it and keep your place |
 | `libretto doctor` | why is it silent? |
 
 [Back to contents](#contents)
@@ -174,12 +175,18 @@ sync_offset = -80          # read-along only; see "Following along"
    same sentence hundreds of times.
 2. Each chapter is cut into sentences of at most 400 characters, respecting `Dr.`, `e.g.`
    and closing quotes.
-3. A sentence is **synthesized once and cached by content**: the key is a hash of text,
+3. Page furniture is not spoken. A footnote body and its raised marker are dropped, so the
+   note never interrupts the sentence that referenced it; a table's cells are replaced by one
+   sentence naming the table and its shape, because read cell by cell it is a column of bare
+   numbers; a code listing is announced by its line count instead of being read as a run of
+   identifiers. Inline code stays — a sentence cannot lose its verb. This is EPUB only: a
+   PDF's text carries no tags, so there is nothing to recognise a listing by.
+4. A sentence is **synthesized once and cached by content**: the key is a hash of text,
    voice, speed and model in `~/.cache/libretto/audio`. Replaying a chapter costs no requests
    and works offline; the cache is disposable, delete it any time.
-4. `mpv` plays one file at a time while the next sentence is already being synthesized, so
+5. `mpv` plays one file at a time while the next sentence is already being synthesized, so
    there is no gap between them.
-5. Your position is saved after **every sentence** — a kill loses at most one sentence.
+6. Your position is saved after **every sentence** — a kill loses at most one sentence.
 
 [Back to contents](#contents)
 
@@ -226,7 +233,7 @@ follow:
 | 1 | unknown book |
 | 2 | ambiguous id (lists the candidates) |
 | 3 | TTS endpoint unreachable |
-| 4 | bad book (DRM, corrupt, or the file changed since it was added) |
+| 4 | bad book (DRM, corrupt, or the file changed since it was added — `libretto refresh <id>` re-indexes that last case) |
 | 5 | another reader holds the lock |
 | 6 | state problem (library, config, player) — `libretto doctor` explains |
 
