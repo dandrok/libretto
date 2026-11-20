@@ -39,6 +39,47 @@ fn strip_html_keeps_a_superscript_that_is_not_a_note() {
 }
 
 #[test]
+fn strip_html_announces_a_table_instead_of_reading_its_cells() {
+    let html = "<p>Here are the times.</p>\
+        <table><tr><th>Runner</th><th>Time</th></tr>\
+        <tr><td>Alice</td><td>3:41</td></tr>\
+        <tr><td>Bob</td><td>3:58</td></tr></table>\
+        <p>Both finished.</p>";
+    let text = strip_html(html);
+
+    assert_eq!(
+        text, "Here are the times.\nTable, 3 rows, 2 columns.\nBoth finished.",
+        "the shape replaces the cells"
+    );
+    for cell in ["Alice", "3:41", "Bob", "Runner"] {
+        assert!(!text.contains(cell), "no bare cell is spoken: {cell}");
+    }
+}
+
+#[test]
+fn strip_html_names_a_table_by_its_caption() {
+    let html = "<table><caption>Table 7-2. Running times</caption>\
+        <tr><td>Alice</td><td>3:41</td></tr>\
+        <tr><td>Bob</td><td>3:58</td></tr></table>";
+    let text = strip_html(html);
+
+    assert_eq!(text, "Table 7-2. Running times, 2 rows, 2 columns.");
+    assert!(
+        !text.contains("3:41"),
+        "the cells are still dropped: {text}"
+    );
+}
+
+#[test]
+fn strip_html_says_nothing_for_an_empty_table() {
+    // A shape it does not have is worse than silence.
+    assert_eq!(
+        strip_html("<p>Before.</p><table></table><p>After.</p>"),
+        "Before.\nAfter."
+    );
+}
+
+#[test]
 fn splitter_respects_abbreviations() {
     let prose = "Dr. Smith met Mr. Jones at 5 p.m. They discussed the e.g. case. \
                  It was fine. Prof. Adams disagreed, i.e. she did. That is all.";
