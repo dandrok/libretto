@@ -45,6 +45,11 @@ pub enum Command {
         /// Full id or any unique prefix
         id: String,
     },
+    /// Re-index a book whose file changed since it was added, keeping the position
+    Refresh {
+        /// Full id or any unique prefix
+        id: String,
+    },
     /// Check that the library, config, player, TTS endpoint and cache are healthy
     Doctor {
         /// TTS base URL to probe, e.g. http://127.0.0.1:8880/v1
