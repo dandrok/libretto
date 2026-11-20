@@ -180,6 +180,15 @@ on the tagged tree.
   `tests/split.rs::strip_html_announces_a_table_instead_of_reading_its_cells`,
   `tests/split.rs::strip_html_names_a_table_by_its_caption`,
   `tests/split.rs::strip_html_says_nothing_for_an_empty_table`
+- AC-28: an EPUB code listing is announced, not read. The body of a `pre` is dropped and
+  replaced by one sentence giving its line count, because a listing spoken aloud is a run of
+  identifiers that also swallows the paragraph that introduced it; inline `code` inside a
+  sentence is untouched and still spoken, since a sentence cannot lose its verb. An empty
+  `pre` says nothing. PDF carries no markup to recognise a listing by, so a listing in a PDF
+  is still spoken —
+  `tests/split.rs::strip_html_announces_a_code_sample_instead_of_reading_it`,
+  `tests/split.rs::strip_html_reads_inline_code_in_its_sentence`,
+  `tests/split.rs::strip_html_says_nothing_for_an_empty_code_sample`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -215,6 +224,9 @@ EPUB:
 - a table is announced by its `caption` and its shape (`Table, two rows, three columns`) and
   its cells are not spoken; a `caption` outside a table and a `figcaption` are still ordinary
   text
+- a code listing (`pre`) is announced by its line count and not read; inline `code` stays part
+  of its sentence. A PDF's text has no tags, so a listing inside a PDF is still spoken: that
+  gap is known and not handled here
 - no OPF title → file stem, exit 0; DRM/encrypted → exit 4, nothing written; empty spine →
   exit 4, `no readable chapters`
 

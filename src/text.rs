@@ -32,7 +32,7 @@ const ABBREVIATIONS: [&str; 22] = [
 ];
 
 /// Tags whose boundaries are paragraph breaks for speech purposes.
-const BLOCK_TAGS: [&str; 20] = [
+const BLOCK_TAGS: [&str; 19] = [
     "p",
     "div",
     "br",
@@ -51,7 +51,6 @@ const BLOCK_TAGS: [&str; 20] = [
     "article",
     "header",
     "footer",
-    "pre",
     "hr",
 ];
 
@@ -87,6 +86,18 @@ pub fn strip_html(html: &str) -> String {
             if let Some(summary) = table_summary(&body) {
                 out.push('\n');
                 out.push_str(&summary);
+                out.push('\n');
+            }
+            continue;
+        }
+        // A listing read aloud is a run of identifiers ('for i in range n print i') that
+        // also swallows the sentence introducing it, so the body is replaced by its size.
+        // Inline `code` is not touched: a sentence cannot lose its verb.
+        if name == "pre" {
+            let body = take_element_body(&mut chars, "pre");
+            if let Some(notice) = code_notice(&body) {
+                out.push('\n');
+                out.push_str(&notice);
                 out.push('\n');
             }
             continue;
@@ -193,6 +204,16 @@ fn table_caption(body: &str, lower: &str) -> Option<String> {
 
 fn counted(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// What is spoken in place of a listing: its size, and nothing else. `None` for a `pre`
+/// with nothing in it, because a listing that is not there is not announced.
+fn code_notice(body: &str) -> Option<String> {
+    let lines = body.lines().filter(|line| !line.trim().is_empty()).count();
+    if lines == 0 {
+        return None;
+    }
+    Some(format!("code sample, {}.", counted(lines, "line", "lines")))
 }
 
 fn decode_entities(input: &str) -> String {
