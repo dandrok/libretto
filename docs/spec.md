@@ -171,6 +171,15 @@ on the tagged tree.
   text, not apparatus, and stays —
   `tests/split.rs::strip_html_drops_a_footnote_and_its_marker`,
   `tests/split.rs::strip_html_keeps_a_superscript_that_is_not_a_note`
+- AC-27: a table is announced instead of enumerated. The cells of a `table` are not spoken,
+  because `td` and `th` are block breaks and a table of running times arrives as a column of
+  bare numbers with no column names; in their place one sentence says what the table is and
+  how big it is — its `caption` when it has one, otherwise `Table`, then the row and column
+  counts — and an empty table says nothing at all rather than announcing a shape it does not
+  have —
+  `tests/split.rs::strip_html_announces_a_table_instead_of_reading_its_cells`,
+  `tests/split.rs::strip_html_names_a_table_by_its_caption`,
+  `tests/split.rs::strip_html_says_nothing_for_an_empty_table`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -203,6 +212,9 @@ EPUB:
   `Mr.`, `Dr.`, `e.g.` and closing quotes respected
 - a footnote body (`aside`) and the raised marker of a noteref are not spoken: the note never
   interrupts the sentence that referenced it, and a superscript that is not a note is kept
+- a table is announced by its `caption` and its shape (`Table, two rows, three columns`) and
+  its cells are not spoken; a `caption` outside a table and a `figcaption` are still ordinary
+  text
 - no OPF title → file stem, exit 0; DRM/encrypted → exit 4, nothing written; empty spine →
   exit 4, `no readable chapters`
 
