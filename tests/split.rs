@@ -80,6 +80,42 @@ fn strip_html_says_nothing_for_an_empty_table() {
 }
 
 #[test]
+fn strip_html_announces_a_code_sample_instead_of_reading_it() {
+    let html = "<p>The loop below sums the range.</p>\
+        <pre><code>total = 0\nfor i in range(n):\n    total += i\nprint(total)</code></pre>\
+        <p>It runs in linear time.</p>";
+    let text = strip_html(html);
+
+    assert_eq!(
+        text, "The loop below sums the range.\ncode sample, 4 lines.\nIt runs in linear time.",
+        "the listing is replaced by its size"
+    );
+    for fragment in ["total", "range(n)", "print", "+="] {
+        assert!(!text.contains(fragment), "no code is spoken: {fragment}");
+    }
+}
+
+#[test]
+fn strip_html_reads_inline_code_in_its_sentence() {
+    // Inline code is part of the sentence; dropping it would lose the verb.
+    let text = strip_html("<p>Run <code>kubectl get pods</code> to list them.</p>");
+    assert_eq!(text, "Run kubectl get pods to list them.");
+}
+
+#[test]
+fn strip_html_says_nothing_for_an_empty_code_sample() {
+    assert_eq!(
+        strip_html("<p>Before.</p><pre></pre><p>After.</p>"),
+        "Before.\nAfter."
+    );
+    assert_eq!(
+        strip_html("<p>Before.</p><pre>   </pre><p>After.</p>"),
+        "Before.\nAfter.",
+        "whitespace is not a listing"
+    );
+}
+
+#[test]
 fn splitter_respects_abbreviations() {
     let prose = "Dr. Smith met Mr. Jones at 5 p.m. They discussed the e.g. case. \
                  It was fine. Prof. Adams disagreed, i.e. she did. That is all.";
