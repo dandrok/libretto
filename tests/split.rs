@@ -6,6 +6,39 @@ use libretto::text::{sentences, strip_html};
 const MAX: usize = 400;
 
 #[test]
+fn strip_html_drops_a_footnote_and_its_marker() {
+    // The shape EPUB 3 uses: a noteref anchor holding the raised marker, and the
+    // note itself in an aside at the end of the chapter.
+    let html = "<html><body>\
+        <p>Binary search halves the range \
+        <a epub:type=\"noteref\" href=\"#fn1\"><sup>1</sup></a> each step.</p>\
+        <aside epub:type=\"footnote\" id=\"fn1\">\
+        <p>1. Assuming the array is sorted.</p></aside>\
+        </body></html>";
+    let text = strip_html(html);
+
+    assert_eq!(
+        text, "Binary search halves the range each step.",
+        "the sentence is whole and unmarked"
+    );
+    assert!(
+        !text.contains("Assuming the array"),
+        "the note is not spoken: {text}"
+    );
+    assert!(
+        !text.contains('1'),
+        "and neither is the marker that pointed at it: {text}"
+    );
+}
+
+#[test]
+fn strip_html_keeps_a_superscript_that_is_not_a_note() {
+    // A `sup` outside a noteref is real text — an exponent, not apparatus.
+    let text = strip_html("<p>The area grows as r<sup>2</sup>.</p>");
+    assert_eq!(text, "The area grows as r2.");
+}
+
+#[test]
 fn splitter_respects_abbreviations() {
     let prose = "Dr. Smith met Mr. Jones at 5 p.m. They discussed the e.g. case. \
                  It was fine. Prof. Adams disagreed, i.e. she did. That is all.";
