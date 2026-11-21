@@ -32,3 +32,43 @@ else
   echo "pre-push: cargo-audit not installed - skipping (CI still enforces it)"
   echo "pre-push: install with: cargo install cargo-audit --locked"
 fi
+
+# --- ai-review: staged secrets only ---------------------------------------------------
+# A committed .env or key is a fact, so it belongs in a gate: no model call, no network,
+# well under a second. The full review (scope gaps, N+1, broken contracts) is a judgement,
+# not a fact — it runs on the PR, where a human can disagree and the record stays visible.
+git fetch origin main --quiet 2>/dev/null || true   # a stale base narrows what gets scanned
+if command -v ai-review >/dev/null 2>&1; then
+  run_ai_review() { ai-review "$@"; }
+else
+  run_ai_review() { npx -y @dandrok/ai-review@latest "$@"; }
+fi
+
+if ! run_ai_review --version >/dev/null 2>&1; then
+  echo "pre-push: ai-review unavailable (no node/npx/network) - skipping the secrets scan"
+else
+  set +e
+  # stdout only: stderr carries diagnostics, and nothing there should ever be counted
+  # as a finding. JSON mode because exit 1 is ambiguous — npx exits 1 when it cannot
+  # fetch the package, which is not a finding.
+  ar_out=$(run_ai_review review --base origin/main --static-only --fail-on warning --format json --quiet 2>/dev/null)
+  ar_status=$?
+  set -e
+  # Parse, do not grep: -1 means no payload arrived, i.e. the scan never ran.
+  ar_count=$(printf '%s' "$ar_out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(Array.isArray(j.findings)?j.findings.length:-1))}catch{process.stdout.write("-1")}})' 2>/dev/null)
+  # node always prints a number; the default only covers node itself failing to run.
+  ar_count=${ar_count:--1}
+  case "$ar_count" in
+    -1)
+      echo "pre-push: ai-review could not run (exit $ar_status) - skipping the secrets scan, not blocking" ;;
+    0)
+      [ "$ar_status" -ne 0 ] && echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
+      ;;
+    *)
+      echo "pre-push: $ar_count credential finding(s) in these commits:"
+      printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
+      echo "pre-push: fix it, or bypass with: git push --no-verify"
+      exit 1
+      ;;
+  esac
+fi

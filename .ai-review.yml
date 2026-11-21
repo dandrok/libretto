@@ -1,0 +1,18 @@
+# ai-review: model-backed review of a diff. Read by the CLI, the pre-push hook
+# and the PR workflow. Flat keys only — there is no YAML parser dependency.
+model: deepseek-flash
+# thinking effort: none | low | high | max
+effort: high
+# never | critical | warning | any  — start with `never` (comment-only) for the first
+# couple of PRs, then flip to `critical` once you have seen its precision.
+fail_on: never
+max_findings: 8
+# characters of repository context on top of the diff (~4 chars per token)
+budget_chars: 60000
+packs: [security, correctness, performance]
+# a prompt hint only; nothing here parses Rust
+language: Rust
+ignore: ["**/*.md", "**/*.lock", "**/target/**"]
+# The PR workflow passes --post explicitly; keeping the file default false means a
+# local pre-push run can never post a review, even if a token happens to be exported.
+post: false
