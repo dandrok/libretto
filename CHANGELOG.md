@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.5](https://github.com/dandrok/libretto/compare/v1.12.4...v1.12.5) - 2026-11-21
+
+### Fixed
+
+- fix the two things the reviewer found on this PR
+
+### Other
+
+- add ai-review to the pre-push hook and PR pipeline
+
 ## [1.12.4](https://github.com/dandrok/libretto/compare/v1.12.3...v1.12.4) - 2026-11-20
 
 ### Fixed
