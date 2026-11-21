@@ -113,20 +113,6 @@ part is paid for. The only item here I would actively argue to pull in.
 - `version` exists but no migration table is documented, while AC-18 already special-cases
   one older format by field absence. That rot compounds with every new field.
 
-## Docs that drift
-
-### B-16 The contract's own header is stale — gate: none
-
-`docs/spec.md:4` still reads `status: implemented — v1.1.1` while the tree is v1.11.1. The
-ACs below it did keep up — `follow`, the wordmark, the waiting line and the captions path
-all have criteria — so the header is the only thing claiming this is a 1.1 tool. Two
-smaller ones in the same commit: AC-23 sits between AC-19 and AC-20, which matters when
-every PR body cites an AC by number; and `decisions.md` §4 names ten files while `src/`
-holds seventeen, omitting `config.rs`, `doctor.rs`, `follow.rs`, `ui.rs`, `captions.rs` and
-`estimate.rs` from the map new work is meant to slot into. AGENTS.md sends a new agent to
-both files before touching code, so this is the cheapest accuracy in the repo, and it is a
-docs-only commit — the shape AGENTS.md asks for.
-
 ## Refused, and staying refused
 
 Cross-device sync, accounts, telemetry, a full-screen TUI, multi-voice dialogue, decoding

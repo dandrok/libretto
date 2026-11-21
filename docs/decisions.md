@@ -50,20 +50,25 @@ The rule: the terminal is for status, not for layout. Anyone wanting a TUI gets 
 Single crate, modules with a one-way dependency order:
 
 ```
+lib.rs      the crate root, so tests can reach every module
 cli.rs      clap types only
 main.rs     dispatch, and the one place an error becomes an exit code
+config.rs   one TOML file, every field optional, flags win
 store.rs    library.json: load, save, lock            -> paths.rs  (every XDG path)
 epub.rs     EPUB -> Book                               -> text.rs   (splitting, furniture)
 pdf.rs      PDF  -> Book            (pdftotext, pdfinfo)
 play.rs     the playback loop, and the Player trait (mpv)
 cache.rs    content-addressed audio                    -> tts.rs    (TtsEngine, Kokoro)
+follow.rs   the read-along view                      -> captions.rs (per-word timings)
+ui.rs       the wordmark, one live status line, the breath
+estimate.rs time-left arithmetic, no request to the engine
+doctor.rs   the five things that make a reader silent
 ```
 
 Both readers return the same `Book`, so splitting, cache keys, position and playback are
 written once. `TtsEngine` and `Player` live in the module they serve rather than in a
 `traits.rs`, so a fake is a two-line impl in the test that needs one.
 
-- `traits.rs` — `TtsEngine` and `Player`, so Kokoro, Edge, or a fake in tests are interchangeable
 - Errors: `thiserror` in each module, `anyhow` only in `main.rs`; every user-facing failure has an
   exit code (0 ok, 1 unknown book, 2 ambiguous, 3 tts down, 4 bad book, 5 already reading, 6 corrupt state)
 - No panics on user input: no `unwrap` outside tests, `expect` only with an invariant comment
