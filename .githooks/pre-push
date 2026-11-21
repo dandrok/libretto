@@ -33,37 +33,34 @@ else
   echo "pre-push: install with: cargo install cargo-audit --locked"
 fi
 
-# --- ai-review: model-backed review of this branch ---------------------------------
-# Not the compiler's job: tenant/scope gaps, error paths, per-row queries, contracts
-# between caller and callee. Exit 1 means findings; exit 2 means the tool could not
-# run (no key, no network) and must never block a push.
-git fetch origin main --quiet 2>/dev/null || true   # a stale base silently narrows the diff
+# --- ai-review: staged secrets only ---------------------------------------------------
+# A committed .env or key is a fact, so it belongs in a gate: no model call, no network,
+# well under a second. The full review (scope gaps, N+1, broken contracts) is a judgement,
+# not a fact — it runs on the PR, where a human can disagree and the record stays visible.
+git fetch origin main --quiet 2>/dev/null || true   # a stale base narrows what gets scanned
 if command -v ai-review >/dev/null 2>&1; then
   run_ai_review() { ai-review "$@"; }
 else
-  run_ai_review() { npx -y @dandrok/ai-review@0.1.2 "$@"; }
+  run_ai_review() { npx -y @dandrok/ai-review@latest "$@"; }
 fi
 
 if ! run_ai_review --version >/dev/null 2>&1; then
-  echo "pre-push: ai-review unavailable (no node/npx/network) - skipping, not blocking"
+  echo "pre-push: ai-review unavailable (no node/npx/network) - skipping the secrets scan"
 else
-  # Exit 1 is ambiguous: npm/npx exit 1 when they cannot fetch the package, which
-  # would read as "critical findings" on a flaky network. The reviewer rewrites
-  # .ai-review/last.json on every run that actually completed, and a failed fetch
-  # never does, so the timestamp is what tells the two apart.
-  ar_before=$(date -r .ai-review/last.json +%s 2>/dev/null || echo 0)
   set +e
-  run_ai_review review --base origin/main --fail-on critical --effort low
+  # JSON mode, because exit 1 is ambiguous: npx exits 1 when it cannot fetch the package.
+  # A parsable payload is the proof that the scan itself ran.
+  ar_out=$(run_ai_review review --base origin/main --static-only --fail-on warning --format json --quiet 2>&1)
   ar_status=$?
   set -e
-  ar_after=$(date -r .ai-review/last.json +%s 2>/dev/null || echo 0)
-
-  if [ "$ar_status" -eq 0 ]; then
-    :
-  elif [ "$ar_status" -eq 1 ] && [ "$ar_after" != "$ar_before" ]; then
-    echo "pre-push: ai-review found critical findings (above). Bypass: git push --no-verify"
-    exit 1
+  if printf '%s' "$ar_out" | grep -q '"findings"'; then
+    if [ "$ar_status" -ne 0 ]; then
+      echo "pre-push: a credential is in these commits:"
+      printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
+      echo "pre-push: fix it, or bypass with: git push --no-verify"
+      exit 1
+    fi
   else
-    echo "pre-push: ai-review could not complete (exit $ar_status) - not blocking"
+    echo "pre-push: ai-review could not run - skipping the secrets scan, not blocking"
   fi
 fi
