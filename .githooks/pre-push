@@ -49,18 +49,20 @@ if ! run_ai_review --version >/dev/null 2>&1; then
 else
   set +e
   # JSON mode, because exit 1 is ambiguous: npx exits 1 when it cannot fetch the package.
-  # A parsable payload is the proof that the scan itself ran.
   ar_out=$(run_ai_review review --base origin/main --static-only --fail-on warning --format json --quiet 2>&1)
   ar_status=$?
   set -e
-  if printf '%s' "$ar_out" | grep -q '"findings"'; then
-    if [ "$ar_status" -ne 0 ]; then
-      echo "pre-push: a credential is in these commits:"
-      printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
-      echo "pre-push: fix it, or bypass with: git push --no-verify"
-      exit 1
-    fi
-  else
-    echo "pre-push: ai-review could not run - skipping the secrets scan, not blocking"
+  # Count findings, not the envelope: an empty array still prints the word "findings".
+  # Only a non-zero count justifies blocking, and only a zero count with a non-zero exit
+  # means the scan never ran.
+  ar_count=$(printf '%s' "$ar_out" | grep -c '"file":' || true)
+  if [ "$ar_count" -gt 0 ]; then
+    echo "pre-push: $ar_count credential finding(s) in these commits:"
+    printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
+    echo "pre-push: fix it, or bypass with: git push --no-verify"
+    exit 1
+  fi
+  if [ "$ar_status" -ne 0 ]; then
+    echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
   fi
 fi
