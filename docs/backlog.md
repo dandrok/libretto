@@ -6,7 +6,8 @@ only records what we noticed and have not decided, with the evidence in the tree
 observation is not re-derived twice. An entry here commits us to nothing. When one is
 picked up it gets a spec commit, then a PR, then this line goes away.
 
-Status: not yet started. Written against v1.11.1.
+Status: written against v1.12.4. A finished entry is **deleted**, not ticked off —
+`CHANGELOG.md` is the record of what shipped, and this file only holds what is still open.
 
 Gate: `spec` means `docs/spec.md` must change in its own commit before any code. `none`
 means it fits the contract as written.
@@ -44,13 +45,6 @@ the cache is always safe, so `libretto cache ls | prune [--older-than Nd] | veri
 low-risk. Touches: `cache.rs` walk, `cli.rs`, exit codes unchanged.
 
 ## Real holes a daily user hits
-
-### B-5 A changed source file is a dead end — gate: none
-
-Changed book exits 4 (AC-15, correct); re-adding the same path is refused by content hash
-(AC-2, also correct). The only escape is `rm` + `add`, which loses the position.
-`libretto refresh <id>` re-indexes and keeps chapter-mapped progress. This is the gap most
-likely to make someone stop using the tool.
 
 ### B-6 No absolute navigation — gate: spec
 
@@ -102,43 +96,6 @@ the substitution set must be in the fingerprint or stale audio replays silently.
   `--player ffplay` silently loses that. Saying so on stderr the first time, or probing the
   socket before promising a pause, is small and honest.
 
-## What the voice says — the round the UI releases skipped
-
-`src/text.rs:60` is the only filter between the page and the speaker, and it drops `script`
-and `style` and nothing else. Every release from 1.2 to 1.11 worked on the run's
-presentation — the bar, the meter, the follow view, the wordmark, the progress numbers —
-and the last change to what actually gets spoken was 1.1.1 skipping a silent fragment. These
-three are why a 25-hour technical book, the audience the README names, still fails.
-They share one trap: a transform that depends on a setting must enter the cache fingerprint
-(`src/cache.rs:59`), or stale audio replays under the new setting without a word.
-
-### B-13 Code samples are read as prose — gate: spec
-
-`pre` is a paragraph break (`src/text.rs:54`) and nothing more, so a listing arrives as one
-run of identifiers: `for i in range(n): print(i)` is spoken as "for i in range n print i".
-Inline `<code>` is not in `BLOCK_TAGS` either, so `O(n log n)` and `kubectl` are read as
-words. In an O'Reilly or Grokking chapter this lands every few pages. Cheapest honest
-versions, in order: announce and skip ("code sample, twelve lines"), or speak the
-identifiers with the punctuation dropped. A `--code skip|read` switch is the spec change;
-either way the choice belongs in the fingerprint.
-
-### B-14 A table loses its headers — gate: spec
-
-`tr`, `td` and `th` are all block tags (`src/text.rs:40-42`), so the rows survive and the
-column meanings do not: a table of running times is read as a column of bare numbers.
-`table` and `figcaption` are not block tags, so a caption runs into the first row. Reading
-it as "Table 7-2, five rows, three columns" and moving on is honest and small; keeping the
-header row with each cell is the better read and the more code.
-
-### B-15 Footnotes interrupt the sentence — gate: spec
-
-`aside` is not a block tag and nothing is dropped, so an EPUB 3 footnote body is
-concatenated into the paragraph that referenced it, marker and all: the sentence about
-binary search is cut in half by a paragraph of endnote. Dropping `aside` bodies (or at
-least the `<sup>` markers) is a branch in the same function as B-13 — `read_tag` already
-returns attributes, so `epub:type="footnote"` is matchable. A fixture with one marked-up
-chapter and one aside proves both.
-
 ## Argued for, currently out of scope
 
 ### B-12 `.m4b` / mp3 export — gate: spec (deliberately, §2)
@@ -155,20 +112,6 @@ part is paid for. The only item here I would actively argue to pull in.
   the future.
 - `version` exists but no migration table is documented, while AC-18 already special-cases
   one older format by field absence. That rot compounds with every new field.
-
-## Docs that drift
-
-### B-16 The contract's own header is stale — gate: none
-
-`docs/spec.md:4` still reads `status: implemented — v1.1.1` while the tree is v1.11.1. The
-ACs below it did keep up — `follow`, the wordmark, the waiting line and the captions path
-all have criteria — so the header is the only thing claiming this is a 1.1 tool. Two
-smaller ones in the same commit: AC-23 sits between AC-19 and AC-20, which matters when
-every PR body cites an AC by number; and `decisions.md` §4 names ten files while `src/`
-holds seventeen, omitting `config.rs`, `doctor.rs`, `follow.rs`, `ui.rs`, `captions.rs` and
-`estimate.rs` from the map new work is meant to slot into. AGENTS.md sends a new agent to
-both files before touching code, so this is the cheapest accuracy in the repo, and it is a
-docs-only commit — the shape AGENTS.md asks for.
 
 ## Refused, and staying refused
 

@@ -12,4 +12,8 @@ Read `docs/spec.md` and `docs/decisions.md` before touching code.
 - Run before every commit: `cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings`.
 - Run before every push: `cargo test`.
 - Every PR states: the AC ids it closes, what it does not do, and the security-review result.
+- When a PR finishes an entry in `docs/backlog.md`, it deletes that entry in the same PR. Nothing
+  is ticked off: the file holds only what is still open, and `CHANGELOG.md` is the record of what
+  shipped. An entry left behind after its PR merged reads as work still to do, so the next agent
+  re-derives it and the file stops being true.
 - Never commit a library file, an epub, a cache or a token. Fixtures are tiny public-domain EPUBs.

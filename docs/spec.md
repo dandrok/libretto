@@ -1,7 +1,7 @@
 ---
 feature: libretto
 risk: [filesystem, spawn, third-party]
-status: implemented — v1.1.1
+status: implemented — v1.12.4
 owner: dandrok
 assumptions:
   - "Kokoro-FastAPI stays OpenAI-compatible at /v1/audio/speech (ASSUMPTION: endpoint rewrite in one file if it changes)"
@@ -106,10 +106,6 @@ on the tagged tree.
   `tests/cli_ls.rs::ls_omits_the_estimate_for_an_index_written_before_the_counts`,
   `src/store.rs::tests::time_left_shrinks_as_the_reader_moves`,
   `src/estimate.rs::tests::a_sentence_takes_its_characters_at_the_measured_rate`
-- AC-23: the read-along block never grows past the window it is given — the current sentence
-  shows at most four of its rows, scrolling so the word being spoken is always one of them, and
-  the neighbouring sentences stay one row each —
-  `src/follow.rs::tests::a_sentence_longer_than_the_window_scrolls_with_the_voice`
 - AC-20: `follow` is a presentation of `read`: on a terminal it draws the sentence being spoken
   wrapped to the width with the word being spoken underlined, redrawing in place, and on a
   pipe or under `--quiet` it emits exactly what `read` emits — same words, no escape
@@ -141,6 +137,10 @@ on the tagged tree.
   `src/play.rs::tests::the_words_of_a_sentence_reach_the_caller_before_it_plays`,
   `src/tts.rs::tests::a_versioned_endpoint_has_a_captioned_sibling`,
   `src/captions.rs::tests::punctuation_of_its_own_belongs_to_the_word_before_it`
+- AC-23: the read-along block never grows past the window it is given — the current sentence
+  shows at most four of its rows, scrolling so the word being spoken is always one of them, and
+  the neighbouring sentences stay one row each —
+  `src/follow.rs::tests::a_sentence_longer_than_the_window_scrolls_with_the_voice`
 - AC-24: opening a book on a terminal says what it is waiting for. The wordmark appears at
   once, before anything about the book is known, and — when the wait outlasts 150 ms — a single
   line under it names the file's kind and size with a mark that advances while the file is
