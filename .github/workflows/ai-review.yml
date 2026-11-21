@@ -29,8 +29,11 @@ jobs:
         with:
           node-version: 20
       - name: ai-review
-        run: npx -y @dandrok/ai-review@latest review --base origin/${{ github.base_ref }} --post
+        run: npx -y @dandrok/ai-review@latest review --base "origin/$BASE_REF" --post
         env:
+          # Never interpolate a git ref into the script: a branch name may legally
+          # contain ; | $( ) and backticks, and bash would run them.
+          BASE_REF: ${{ github.base_ref }}
           # The only secret you create. Everything else here is provided by the run.
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           # github.token is the automatic per-run token; it is not a repository secret

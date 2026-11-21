@@ -48,21 +48,27 @@ if ! run_ai_review --version >/dev/null 2>&1; then
   echo "pre-push: ai-review unavailable (no node/npx/network) - skipping the secrets scan"
 else
   set +e
-  # JSON mode, because exit 1 is ambiguous: npx exits 1 when it cannot fetch the package.
-  ar_out=$(run_ai_review review --base origin/main --static-only --fail-on warning --format json --quiet 2>&1)
+  # stdout only: stderr carries diagnostics, and nothing there should ever be counted
+  # as a finding. JSON mode because exit 1 is ambiguous — npx exits 1 when it cannot
+  # fetch the package, which is not a finding.
+  ar_out=$(run_ai_review review --base origin/main --static-only --fail-on warning --format json --quiet 2>/dev/null)
   ar_status=$?
   set -e
-  # Count findings, not the envelope: an empty array still prints the word "findings".
-  # Only a non-zero count justifies blocking, and only a zero count with a non-zero exit
-  # means the scan never ran.
-  ar_count=$(printf '%s' "$ar_out" | grep -c '"file":' || true)
-  if [ "$ar_count" -gt 0 ]; then
-    echo "pre-push: $ar_count credential finding(s) in these commits:"
-    printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
-    echo "pre-push: fix it, or bypass with: git push --no-verify"
-    exit 1
-  fi
-  if [ "$ar_status" -ne 0 ]; then
-    echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
-  fi
+  # Parse, do not grep: -1 means no payload arrived, i.e. the scan never ran.
+  ar_count=$(printf '%s' "$ar_out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(String(Array.isArray(j.findings)?j.findings.length:-1))}catch{process.stdout.write("-1")}})' 2>/dev/null)
+  # node always prints a number; the default only covers node itself failing to run.
+  ar_count=${ar_count:--1}
+  case "$ar_count" in
+    -1)
+      echo "pre-push: ai-review could not run (exit $ar_status) - skipping the secrets scan, not blocking" ;;
+    0)
+      [ "$ar_status" -ne 0 ] && echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
+      ;;
+    *)
+      echo "pre-push: $ar_count credential finding(s) in these commits:"
+      printf '%s\n' "$ar_out" | grep -E '"title"|"file"|"start_line"' | sed 's/^ */  /'
+      echo "pre-push: fix it, or bypass with: git push --no-verify"
+      exit 1
+      ;;
+  esac
 fi
