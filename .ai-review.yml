@@ -13,4 +13,6 @@ packs: [security, correctness, performance]
 # a prompt hint only; nothing here parses Rust
 language: Rust
 ignore: ["**/*.md", "**/*.lock", "**/target/**"]
-post: true
+# The PR workflow passes --post explicitly; keeping the file default false means a
+# local pre-push run can never post a review, even if a token happens to be exported.
+post: false

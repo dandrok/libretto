@@ -41,17 +41,29 @@ git fetch origin main --quiet 2>/dev/null || true   # a stale base silently narr
 if command -v ai-review >/dev/null 2>&1; then
   run_ai_review() { ai-review "$@"; }
 else
-  run_ai_review() { npx -y @dandrok/ai-review@0.1.1 "$@"; }
+  run_ai_review() { npx -y @dandrok/ai-review@0.1.2 "$@"; }
 fi
 
-set +e
-run_ai_review review --base origin/main --fail-on critical --effort low
-ar_status=$?
-set -e
+if ! run_ai_review --version >/dev/null 2>&1; then
+  echo "pre-push: ai-review unavailable (no node/npx/network) - skipping, not blocking"
+else
+  # Exit 1 is ambiguous: npm/npx exit 1 when they cannot fetch the package, which
+  # would read as "critical findings" on a flaky network. The reviewer rewrites
+  # .ai-review/last.json on every run that actually completed, and a failed fetch
+  # never does, so the timestamp is what tells the two apart.
+  ar_before=$(date -r .ai-review/last.json +%s 2>/dev/null || echo 0)
+  set +e
+  run_ai_review review --base origin/main --fail-on critical --effort low
+  ar_status=$?
+  set -e
+  ar_after=$(date -r .ai-review/last.json +%s 2>/dev/null || echo 0)
 
-if [ "$ar_status" -eq 1 ]; then
-  echo "pre-push: ai-review found critical findings (above). Bypass: git push --no-verify"
-  exit 1
-elif [ "$ar_status" -ne 0 ]; then
-  echo "pre-push: ai-review skipped (exit $ar_status) - no key or no network; not blocking"
+  if [ "$ar_status" -eq 0 ]; then
+    :
+  elif [ "$ar_status" -eq 1 ] && [ "$ar_after" != "$ar_before" ]; then
+    echo "pre-push: ai-review found critical findings (above). Bypass: git push --no-verify"
+    exit 1
+  else
+    echo "pre-push: ai-review could not complete (exit $ar_status) - not blocking"
+  fi
 fi
