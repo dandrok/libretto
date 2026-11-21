@@ -32,3 +32,26 @@ else
   echo "pre-push: cargo-audit not installed - skipping (CI still enforces it)"
   echo "pre-push: install with: cargo install cargo-audit --locked"
 fi
+
+# --- ai-review: model-backed review of this branch ---------------------------------
+# Not the compiler's job: tenant/scope gaps, error paths, per-row queries, contracts
+# between caller and callee. Exit 1 means findings; exit 2 means the tool could not
+# run (no key, no network) and must never block a push.
+git fetch origin main --quiet 2>/dev/null || true   # a stale base silently narrows the diff
+if command -v ai-review >/dev/null 2>&1; then
+  run_ai_review() { ai-review "$@"; }
+else
+  run_ai_review() { npx -y @dandrok/ai-review@0.1.1 "$@"; }
+fi
+
+set +e
+run_ai_review review --base origin/main --fail-on critical --effort low
+ar_status=$?
+set -e
+
+if [ "$ar_status" -eq 1 ]; then
+  echo "pre-push: ai-review found critical findings (above). Bypass: git push --no-verify"
+  exit 1
+elif [ "$ar_status" -ne 0 ]; then
+  echo "pre-push: ai-review skipped (exit $ar_status) - no key or no network; not blocking"
+fi

@@ -1,0 +1,35 @@
+# AI review of the pull request diff: every finding is anchored to a line that
+# exists in the diff, and the summary is posted as one review.
+name: ai-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Secrets are never passed to workflow runs triggered by a pull request from a
+    # fork. Skip those instead of failing red for a reason unrelated to their code.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the base branch must exist locally for the diff
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: ai-review
+        run: npx -y @dandrok/ai-review@0.1.1 review --base origin/${{ github.base_ref }} --post
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
