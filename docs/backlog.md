@@ -106,8 +106,6 @@ part is paid for. The only item here I would actively argue to pull in.
 
 ## Proof gaps
 
-- No test found for `MAX_ENTRY_BYTES` / `MAX_BOOK_PROSE_BYTES` (`src/epub.rs:19,21`). Two
-  tests, one zip-bomb-shaped fixture, against the most hostile input surface we have.
 - No test for a malformed OPF, an empty spine, or a `library.json` whose `version` is from
   the future.
 - `version` exists but no migration table is documented, while AC-18 already special-cases

@@ -108,13 +108,7 @@ pub fn load(path: &Path) -> Result<Book, EpubError> {
         if body.is_empty() {
             continue; // a chapter that is only an image says nothing
         }
-        prose_bytes += body.len() as u64;
-        if prose_bytes > MAX_BOOK_PROSE_BYTES {
-            return Err(EpubError::TooLarge {
-                entry: "the book's prose".to_string(),
-                limit_bytes: MAX_BOOK_PROSE_BYTES,
-            });
-        }
+        count_prose(&mut prose_bytes, body.len() as u64)?;
         chapters.push(Chapter {
             title: heading(&markup, &title, package.author.as_deref()),
             text: body,
@@ -137,6 +131,24 @@ fn fallback_title(path: &Path) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("untitled")
         .to_string()
+}
+
+/// Add one chapter to the book-wide prose total, refusing a book that grows past
+/// the ceiling.
+///
+/// Per-entry size is checked in [`read_entry`], but an archive is not allowed to
+/// buy the same memory back sixteen megabytes at a time, so the running total has
+/// to be watched too. Kept as arithmetic, with no markup in it, so the ceiling can
+/// be tested at its boundary without inflating 64 MiB of prose to get there.
+fn count_prose(total: &mut u64, chapter_bytes: u64) -> Result<(), EpubError> {
+    *total = total.saturating_add(chapter_bytes);
+    if *total > MAX_BOOK_PROSE_BYTES {
+        return Err(EpubError::TooLarge {
+            entry: "the book's prose".to_string(),
+            limit_bytes: MAX_BOOK_PROSE_BYTES,
+        });
+    }
+    Ok(())
 }
 
 /// Read one archive entry, refusing anything that inflates past the ceiling.
@@ -299,7 +311,7 @@ fn has_encrypted_content(
 
 fn dir_of(path: &str) -> String {
     match path.rfind('/') {
-        Some(pos) => path[..pos].to_string(),
+        Some(pos) => path.split_at(pos).0.to_string(),
         None => String::new(),
     }
 }
@@ -369,4 +381,31 @@ fn heading(markup: &str, title: &str, author: Option<&str>) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_book_ceiling_is_the_sum_of_its_chapters() {
+        // Four chapters at the per-entry ceiling sum to exactly the book ceiling,
+        // which is the tightest case the entry check lets through: the boundary is
+        // allowed, because the limit is what fits, not one byte less.
+        let mut total = 0;
+        for _ in 0..4 {
+            count_prose(&mut total, MAX_ENTRY_BYTES).expect("64 MiB of prose fits");
+        }
+        assert_eq!(total, MAX_BOOK_PROSE_BYTES);
+
+        // One more byte, in a fifth chapter, is where the book stops being readable
+        // in memory and the error names the prose count rather than an entry.
+        match count_prose(&mut total, 1) {
+            Err(EpubError::TooLarge { entry, limit_bytes }) => {
+                assert_eq!(entry, "the book's prose", "the book-wide ceiling fired");
+                assert_eq!(limit_bytes, MAX_BOOK_PROSE_BYTES);
+            }
+            other => panic!("64 MiB + 1 byte must be refused, not spoken: {other:?}"),
+        }
+    }
 }
