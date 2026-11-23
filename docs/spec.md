@@ -107,15 +107,19 @@ on the tagged tree.
   `src/store.rs::tests::time_left_shrinks_as_the_reader_moves`,
   `src/estimate.rs::tests::a_sentence_takes_its_characters_at_the_measured_rate`
 - AC-20: `follow` is a presentation of `read`: on a terminal it draws the sentence being spoken
-  wrapped to the width with the word being spoken underlined, redrawing in place, and on a
-  pipe or under `--quiet` it emits exactly what `read` emits — same words, no escape
-  sequences, same exit code —
+  wrapped to the width of the terminal it is drawn on — `--width` when given, then the
+  terminal's own size, then `$COLUMNS`, then eighty columns — with the word being spoken
+  underlined, redrawing in place, and no row it paints is wider than that width, because a
+  row the terminal soft-wraps occupies two rows while the painter counted one and every
+  frame after it lands inside the block before; on a pipe or under `--quiet` it emits
+  exactly what `read` emits — same words, no escape sequences, same exit code —
   `tests/cli_follow.rs::follow_on_a_pipe_is_read_byte_for_byte`,
   `tests/cli_follow.rs::follow_quiet_is_plain_and_says_where_it_stopped`,
   `tests/cli_follow.rs::follow_accepts_the_same_arguments_as_read`,
+  `tests/cli_follow.rs::a_narrow_terminal_gets_rows_that_fit_it`,
   `src/follow.rs::tests::the_active_word_is_lit_on_the_row_that_holds_it`,
   `src/follow.rs::tests::a_long_sentence_wraps_without_breaking_a_word`,
-  `src/ui.rs::tests::the_width_flag_wins_over_the_terminal_and_stays_sane`
+  `src/ui.rs::tests::a_row_wider_than_the_width_counts_as_the_rows_it_takes`
 - AC-21: with mpv as the player, `follow` draws the underline against mpv's own playback
   position over its IPC socket, so the underline stands still while playback is paused and
   moves again when it resumes, and the line shows a pause mark instead of the breath for as

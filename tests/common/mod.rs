@@ -206,22 +206,10 @@ impl Default for Sandbox {
 /// a stub there instead of reaching into the program.
 #[cfg(target_os = "linux")]
 pub fn under_pty(sandbox: &Sandbox, args: &str) -> String {
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
     use std::process::Command;
 
-    if !Path::new("/usr/bin/script").exists() && !Path::new("/bin/script").exists() {
-        panic!(
-            "no `script` binary: this proof cannot run, and skipping it silently would hide that"
-        );
-    }
-
     let root = sandbox.root().display();
-    let player = sandbox.root().join("slow-player");
-    if !player.exists() {
-        std::fs::write(&player, "#!/bin/sh\nsleep 1\n").expect("player script");
-        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
+    let player = slow_player(sandbox);
     let inner = format!(
         "env XDG_DATA_HOME='{root}/data' XDG_CACHE_HOME='{root}/cache' \
              XDG_CONFIG_HOME='{root}/config' HOME='{root}' COLUMNS=60 \
@@ -230,9 +218,108 @@ pub fn under_pty(sandbox: &Sandbox, args: &str) -> String {
         env!("CARGO_BIN_EXE_libretto"),
         player.display(),
     );
-    let output = Command::new("script")
+    let output = Command::new(script_bin())
         .args(["-qec", &inner, "/dev/null"])
         .output()
         .expect("run under a pty");
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// The same real pty with the size the caller names, and **no** `--width` and no `$COLUMNS`.
+///
+/// What is left as a source of a width is the terminal itself, which is the thing under
+/// test: a program that guesses eighty columns draws eighty-column rows into a sixty-column
+/// pty, and the terminal soft-wraps each of them into two.
+#[cfg(target_os = "linux")]
+pub fn under_pty_sized(sandbox: &Sandbox, args: &str, columns: usize) -> String {
+    use std::process::Command;
+
+    let root = sandbox.root().display();
+    let player = slow_player(sandbox);
+    let inner = format!(
+        "stty cols {columns} rows 30; env -u COLUMNS \
+             XDG_DATA_HOME='{root}/data' XDG_CACHE_HOME='{root}/cache' \
+             XDG_CONFIG_HOME='{root}/config' HOME='{root}' \
+             PATH='{root}/bin':$PATH \
+             '{}' {args} --player '{}'",
+        env!("CARGO_BIN_EXE_libretto"),
+        player.display(),
+    );
+    let output = Command::new(script_bin())
+        .args(["-qec", &inner, "/dev/null"])
+        .output()
+        .expect("run under a pty");
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+/// The rows the painter wrote, in order, with escape sequences removed.
+///
+/// One painted row starts with `\r\x1b[2K`; the row itself ends at the newline the painter
+/// writes after it, not at the next frame's opener — the closing summary is written once the
+/// block is over and would otherwise be glued onto the last row.
+pub fn painted_rows(raw: &str) -> Vec<String> {
+    raw.split("\r\x1b[2K")
+        .skip(1)
+        .map(painted_row)
+        .map(without_escapes)
+        .filter(|row| !row.trim().is_empty())
+        .collect()
+}
+
+/// The text of one painted row: the bar line carries its own `\r\x1b[2K` prefix, so any
+/// number of them at the front are the painter's, not the row's.
+fn painted_row(segment: &str) -> &str {
+    let mut rest = segment;
+    loop {
+        if let Some(stripped) = rest.strip_prefix('\r') {
+            rest = stripped;
+        } else if let Some(stripped) = rest.strip_prefix("\x1b[2K") {
+            rest = stripped;
+        } else {
+            break;
+        }
+    }
+    rest.split(['\r', '\n']).next().unwrap_or("")
+}
+
+fn without_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(character) = chars.next() {
+        if character != '\x1b' {
+            out.push(character);
+            continue;
+        }
+        // `ESC [` params final: the only sequences this program writes are CSI.
+        for next in chars.by_ref() {
+            if next.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn script_bin() -> std::path::PathBuf {
+    ["/usr/bin/script", "/bin/script"]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|candidate| candidate.exists())
+        .expect(
+            "no `script` binary: this proof cannot run, and skipping it silently would hide that",
+        )
+}
+
+/// A player that holds each sentence long enough for a frame to be drawn under it.
+#[cfg(target_os = "linux")]
+fn slow_player(sandbox: &Sandbox) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let player = sandbox.root().join("slow-player");
+    if !player.exists() {
+        std::fs::write(&player, "#!/bin/sh\nsleep 1\n").expect("player script");
+        std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    player
 }

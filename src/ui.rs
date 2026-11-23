@@ -114,18 +114,40 @@ pub struct Ui {
     clock: Arc<AtomicUsize>,
 }
 
+/// The terminal's own width, asked of the handle the picture is drawn on.
+///
+/// `$COLUMNS` is not a substitute: a shell sets it for itself and rarely exports it, so a
+/// sixty-column terminal used to be drawn at eighty and every row soft-wrapped. `std` can
+/// answer *whether* a handle is a terminal but not how wide it is, and this crate forbids
+/// `unsafe`, so the winsize query comes from `rustix` — already in the build through another
+/// dependency, so this adds no crate to the graph.
+#[cfg(unix)]
+fn terminal_columns() -> Option<usize> {
+    rustix::termios::tcgetwinsize(io::stderr())
+        .ok()
+        .map(|size| usize::from(size.ws_col))
+        .filter(|columns| *columns > 0)
+}
+
+#[cfg(not(unix))]
+fn terminal_columns() -> Option<usize> {
+    None
+}
+
 impl Ui {
     /// `quiet` wins over everything; after that, a terminal decides.
     pub fn new(quiet: bool) -> Self {
         Self::with_width(quiet, None)
     }
 
-    /// The read-along needs a width before it can wrap: `--width`, then `$COLUMNS`, then
-    /// eighty columns, always with two columns of margin so no row touches the edge.
+    /// The read-along needs a width before it can wrap: `--width`, then the terminal's own
+    /// size, then `$COLUMNS`, then eighty columns, always with two columns of margin so no
+    /// row touches the edge.
     pub fn with_width(quiet: bool, width: Option<usize>) -> Self {
         let interactive = !quiet && io::stderr().is_terminal();
         let colour = interactive && std::env::var_os("NO_COLOR").is_none();
         let columns = width
+            .or_else(terminal_columns)
             .or_else(|| {
                 std::env::var("COLUMNS")
                     .ok()
@@ -271,7 +293,7 @@ impl Ui {
         // stands, so a draw after the pulse has stopped rewrites that row instead of writing
         // a second bar under the first.
         let row = bar_line_with(&redrawn, tick, false, self.colour, self.width);
-        let _ = self.paint.draw(&mut err, &[row]);
+        let _ = self.paint.draw(&mut err, &[row], self.width);
     }
 
     /// Animate the breath until the returned guard is dropped — i.e. exactly
@@ -311,7 +333,7 @@ impl Ui {
                 // The clock is sampled every tick, but the terminal is only written when the
                 // picture differs: a held word and a still breath cost nothing.
                 if frame != last {
-                    if paint.draw(&mut err, &frame).is_err() {
+                    if paint.draw(&mut err, &frame, width).is_err() {
                         break;
                     }
                     last = frame;
@@ -403,7 +425,12 @@ impl Paint {
 
     /// Move up over the previous frame, rewrite every row, and erase whatever is left
     /// below when the new frame is shorter than the old.
-    fn draw(&self, out: &mut impl Write, frame: &[String]) -> io::Result<()> {
+    ///
+    /// `width` is the column budget a row was wrapped to. A row wider than that — a word no
+    /// space can break, a wide script — is soft-wrapped by the terminal itself, and counting
+    /// it as one row puts every frame after it inside the block before. That is what a screen
+    /// of duplicated sentences was.
+    fn draw(&self, out: &mut impl Write, frame: &[String], width: usize) -> io::Result<()> {
         let drawn = self.drawn.load(Ordering::Relaxed);
         let mut buffer = String::new();
         if drawn > 0 {
@@ -414,12 +441,27 @@ impl Paint {
             buffer.push_str(line);
             buffer.push('\n');
         }
-        if frame.len() < drawn {
+        let rows: usize = frame
+            .iter()
+            .map(|line| rows_for(line, width))
+            .sum::<usize>()
+            .max(1);
+        if rows < drawn {
             buffer.push_str("\x1b[J");
         }
-        self.drawn.store(frame.len(), Ordering::Relaxed);
+        self.drawn.store(rows, Ordering::Relaxed);
         write!(out, "{buffer}")?;
         out.flush()
+    }
+}
+
+/// How many terminal rows one painted line takes: one per full width it spills over.
+fn rows_for(line: &str, width: usize) -> usize {
+    let columns = visible_columns(line);
+    if width == 0 {
+        1
+    } else {
+        columns.div_ceil(width).max(1)
     }
 }
 
@@ -742,15 +784,53 @@ mod tests {
         // a redraw has to move up over the frame rather than on to the next row.
         let paint = Paint::default();
         let mut out: Vec<u8> = Vec::new();
-        paint.draw(&mut out, &["first".to_string()]).expect("drawn");
+        paint
+            .draw(&mut out, &["first".to_string()], 80)
+            .expect("drawn");
         out.clear();
         paint
-            .draw(&mut out, &["second".to_string()])
+            .draw(&mut out, &["second".to_string()], 80)
             .expect("drawn");
         let written = String::from_utf8_lossy(&out);
         assert!(
             written.starts_with("\x1b[1F"),
             "moves back over the row it drew: {written:?}"
+        );
+    }
+
+    #[test]
+    fn a_row_wider_than_the_width_counts_as_the_rows_it_takes() {
+        // The terminal wraps a twenty-five column row at ten columns into three, and it wraps
+        // it whether or not the painter counted on it. Counting one leaves two rows behind,
+        // so the next frame lands inside the block — the screen of duplicated sentences a
+        // narrow terminal showed.
+        let paint = Paint::default();
+        let mut out: Vec<u8> = Vec::new();
+        paint.draw(&mut out, &["x".repeat(25)], 10).expect("drawn");
+        out.clear();
+        paint.draw(&mut out, &["y".to_string()], 10).expect("drawn");
+        let written = String::from_utf8_lossy(&out);
+        assert!(
+            written.starts_with("\x1b[3F"),
+            "moves up over all three rows it took: {written:?}"
+        );
+    }
+
+    #[test]
+    fn styling_costs_no_columns_when_the_rows_are_counted() {
+        // Underline and colour escapes are zero width, so the count has to look past them:
+        // otherwise every underlined word would push the frame up by an extra row.
+        let paint = Paint::default();
+        let mut out: Vec<u8> = Vec::new();
+        paint
+            .draw(&mut out, &["\x1b[4malphabeta\x1b[0m".to_string()], 10)
+            .expect("drawn");
+        out.clear();
+        paint.draw(&mut out, &["z".to_string()], 10).expect("drawn");
+        let written = String::from_utf8_lossy(&out);
+        assert!(
+            written.starts_with("\x1b[1F"),
+            "nine visible columns are one row: {written:?}"
         );
     }
 

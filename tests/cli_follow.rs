@@ -174,3 +174,45 @@ fn a_negative_sync_offset_is_a_value_not_a_flag() {
         );
     }
 }
+
+/// The width the block wraps to has to be the terminal's own. Guessing eighty columns on a
+/// sixty-column terminal makes every painted row soft-wrap into two, and the painter, which
+/// counts the logical rows it wrote, then moves up one row too few — so the next frame lands
+/// inside the previous block and the screen fills with duplicated, glued sentences.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_narrow_terminal_gets_rows_that_fit_it() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "narrow.epub",
+        Some("Narrow Book"),
+        &[(
+            "One",
+            "The systems of record are the primary databases to which data is first written, \
+             and every other system in the organisation derives from them in some way.",
+        )],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+
+    let endpoint = fake.endpoint();
+    let raw = common::under_pty_sized(
+        &sandbox,
+        &format!("follow narrow --endpoint '{endpoint}' --sentences 1"),
+        60,
+    );
+
+    let rows = common::painted_rows(&raw);
+    assert!(
+        !rows.is_empty(),
+        "the block was drawn at all, or nothing below means anything: {raw:?}"
+    );
+    for row in &rows {
+        assert!(
+            row.chars().count() <= 60,
+            "a row must fit the 60-column terminal it is drawn on, this one is {} \
+             characters and will wrap: {row:?}",
+            row.chars().count()
+        );
+    }
+}
