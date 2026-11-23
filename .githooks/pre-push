@@ -62,7 +62,12 @@ else
     -1)
       echo "pre-push: ai-review could not run (exit $ar_status) - skipping the secrets scan, not blocking" ;;
     0)
-      [ "$ar_status" -ne 0 ] && echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
+      # This branch is the success path: the scan ran and found nothing. It must not
+      # decide the hook's exit status — `[ ... ] && echo` is false here, and as the
+      # last command it made the whole hook exit 1, refusing every clean push.
+      if [ "$ar_status" -ne 0 ]; then
+        echo "pre-push: ai-review exited $ar_status with no findings - not blocking"
+      fi
       ;;
     *)
       echo "pre-push: $ar_count credential finding(s) in these commits:"
