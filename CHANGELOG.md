@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.12.7](https://github.com/dandrok/libretto/compare/v1.12.6...v1.12.7) - 2026-11-23
+
+### Fixed
+
+- *(ui)* measure the terminal instead of guessing eighty columns
+
+### Other
+
+- Merge pull request #67 from dandrok/fix/terminal-width
+- *(deps)* refresh the lockfile past two advisories
+
 ## [1.12.6](https://github.com/dandrok/libretto/compare/v1.12.5...v1.12.6) - 2026-11-23
 
 ### Other
