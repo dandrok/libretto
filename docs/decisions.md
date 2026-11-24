@@ -25,7 +25,7 @@ works offline after first play.
 - `libretto rm <id>`
 - `libretto doctor` — mpv present? endpoint reachable? cache size?
 - bare `libretto` — resume the last book
-- Flags: `--voice --speed --endpoint --model --player --prefetch --chapter --skip --rewind --sentences`
+- Flags: `--voice --speed --endpoint --model --player --prefetch --chapter --skip --rewind --sentences --for`
 
 Not: MOBI/AZW3, m4b export, sync, accounts, telemetry, any engine that is not
 OpenAI-compatible HTTP. (PDF was in the v1 cut line and arrived in 1.1.0 as an adapter
