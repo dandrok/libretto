@@ -232,7 +232,7 @@ follow:
 |---|---|
 | 0 | ok |
 | 1 | unknown book |
-| 2 | ambiguous id (lists the candidates) |
+| 2 | usage error, or an ambiguous id (lists the candidates) |
 | 3 | TTS endpoint unreachable |
 | 4 | bad book (DRM, corrupt, or the file changed since it was added — `libretto refresh <id>` re-indexes that last case) |
 | 5 | another reader holds the lock |

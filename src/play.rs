@@ -547,11 +547,12 @@ mod tests {
         };
         let mut positions = Vec::new();
 
-        // Fifty milliseconds a sentence against a window of two hundred: the path from the
+        // Fifty milliseconds a sentence against a window of four hundred: the path from the
         // first sentence to the player — cache lookup, synthesis, the cache's fsync — has
-        // 200 ms of room, so at least one sentence always starts; five sentences cost
-        // 5 × 50 = 250 ms, so the fifth cannot finish inside the window.
-        let window = Instant::now() + Duration::from_millis(200);
+        // 400 ms of room, so at least one sentence always starts; eight sentences cost
+        // 8 × 50 = 400 ms, so the ninth cannot finish inside the window and ten of them
+        // certainly do not.
+        let window = Instant::now() + Duration::from_millis(400);
         let result = play_sentences(
             &session,
             &sentences(10),
@@ -564,8 +565,8 @@ mod tests {
         .expect("plays");
 
         assert!(
-            (1..=4).contains(&result.count),
-            "the window was open when the run began and closed before the fifth sentence, not {}",
+            (1..=8).contains(&result.count),
+            "the window was open when the run began and closed before the ninth sentence, not {}",
             result.count
         );
         assert_eq!(

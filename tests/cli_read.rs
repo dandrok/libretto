@@ -1,4 +1,4 @@
-//! AC-4, AC-6, AC-7, AC-8: the `read` command's contract.
+//! AC-4, AC-6, AC-7, AC-8, AC-29: the `read` command's contract.
 //!
 //! Playback runs with `--player true` — resolved from PATH, never an absolute
 //! path, because macOS keeps it in /usr/bin while Linux has it in /bin.
@@ -198,7 +198,7 @@ fn a_timer_that_has_already_expired_plays_nothing() {
         "nor does it pay for audio it will not speak"
     );
     assert!(
-        stdout.contains("0 played"),
+        stdout.contains("(0 played,"),
         "and it says so rather than pretending the chapter ended: {stdout}"
     );
 }
