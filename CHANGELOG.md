@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.13.0](https://github.com/dandrok/libretto/compare/v1.12.7...v1.13.0) - 2026-11-24
+
+### Added
+
+- *(read)* a listening budget with --for
+
+### Fixed
+
+- *(read)* refuse a window the clock cannot hold
+- *(read)* no panic for an unrepresentable window, and prove the chapter-end promise
+
+### Other
+
+- *(read)* dock the timer proof and the docs it leans on
+
 ## [1.12.7](https://github.com/dandrok/libretto/compare/v1.12.6...v1.12.7) - 2026-11-23
 
 ### Fixed
