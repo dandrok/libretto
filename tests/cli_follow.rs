@@ -108,6 +108,10 @@ fn follow_accepts_the_same_arguments_as_read() {
         "1",
         "--sentences",
         "1",
+        // An hour is longer than this book, so the budget never ends the run early: the
+        // point is that `follow` takes the flag `read` takes.
+        "--for",
+        "1h",
         "--speed",
         "1.25",
         "--width",

@@ -533,7 +533,7 @@ mod tests {
         let engine = CountingEngine::new();
         let player = SlowPlayer {
             played: RefCell::new(Vec::new()),
-            per_sentence: Duration::from_millis(20),
+            per_sentence: Duration::from_millis(50),
         };
         let dir = tempfile::tempdir().expect("tempdir");
         let cache = Cache::at(dir.path());
@@ -547,9 +547,11 @@ mod tests {
         };
         let mut positions = Vec::new();
 
-        // Thirty milliseconds against twenty per sentence: the window closes after the
-        // first or second sentence, never after the tenth.
-        let window = Instant::now() + Duration::from_millis(30);
+        // Fifty milliseconds a sentence against a window of two hundred: the path from the
+        // first sentence to the player — cache lookup, synthesis, the cache's fsync — has
+        // 200 ms of room, so at least one sentence always starts; five sentences cost
+        // 5 × 50 = 250 ms, so the fifth cannot finish inside the window.
+        let window = Instant::now() + Duration::from_millis(200);
         let result = play_sentences(
             &session,
             &sentences(10),
@@ -561,16 +563,15 @@ mod tests {
         )
         .expect("plays");
 
-        assert!(result.count >= 1, "the window was open when the run began");
-        assert!(result.count < 10, "it closed before the chapter ended");
-        assert_eq!(
-            result.next, result.count,
-            "the saved position is the sentence that did not start"
+        assert!(
+            (1..=4).contains(&result.count),
+            "the window was open when the run began and closed before the fifth sentence, not {}",
+            result.count
         );
         assert_eq!(
-            positions.len(),
-            result.count,
-            "progress is reported only for sentences that played"
+            positions,
+            (1..=result.count).collect::<Vec<_>>(),
+            "progress is reported after each sentence that played, and it starts at one"
         );
         assert_eq!(
             player.played.borrow().len(),

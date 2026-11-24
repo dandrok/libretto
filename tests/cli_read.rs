@@ -168,17 +168,33 @@ fn a_timer_that_has_already_expired_plays_nothing() {
     sandbox.stdout_of(&["add", book.to_str().expect("path")]);
     let endpoint = fake.endpoint();
 
+    // One sentence read first, so "left alone" can be told from "reset to zero".
+    let first = read_args(
+        "timed",
+        &fake,
+        &["--endpoint", &endpoint, "--sentences", "1"],
+    );
+    sandbox.stdout_of(&first);
+    assert_eq!(position(&sandbox, "timed"), (0, 1), "one sentence was read");
+    let hits_before = fake.hits();
+
     let args = read_args("timed", &fake, &["--endpoint", &endpoint, "--for", "0s"]);
-    let stdout = sandbox.stdout_of(&args);
+    let output = sandbox.run(&args);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a closed window is not a failure"
+    );
+    assert_eq!(
         position(&sandbox, "timed"),
-        (0, 0),
+        (0, 1),
         "a window that closed before the run began starts no sentence"
     );
     assert_eq!(
         fake.hits(),
-        0,
+        hits_before,
         "nor does it pay for audio it will not speak"
     );
     assert!(
@@ -216,6 +232,75 @@ fn a_timer_that_cannot_be_parsed_exits_2_without_playing() {
         fake.hits(),
         0,
         "nothing is played for a duration it cannot read"
+    );
+}
+
+#[test]
+fn an_unrepresentable_window_is_not_a_panic() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "book.epub",
+        Some("Timed"),
+        &[("One", "One sentence. Two sentence. Three sentence.")],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+    let endpoint = fake.endpoint();
+    let total = sentence_count(&book);
+
+    // Nine quintillion seconds: an instant no clock holds, so there is no deadline and
+    // the run is unbounded rather than a panic in the middle of the chapter.
+    let args = read_args(
+        "timed",
+        &fake,
+        &["--endpoint", &endpoint, "--for", "9223372037000000000"],
+    );
+    let output = sandbox.run(&args);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a window the clock cannot hold is not a failure: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "and it is not a panic either: {stderr}"
+    );
+    assert_eq!(
+        position(&sandbox, "timed"),
+        (0, total),
+        "the chapter is read as it would be without --for"
+    );
+}
+
+#[test]
+fn a_window_longer_than_the_chapter_stops_at_the_chapter_end() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "book.epub",
+        Some("Budgeted"),
+        &[
+            ("One", "First sentence here. Second one follows."),
+            ("Two", "Third sentence."),
+        ],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+    let endpoint = fake.endpoint();
+    let chapter_one = sentence_count(&book);
+
+    let args = read_args("budgeted", &fake, &["--endpoint", &endpoint, "--for", "1h"]);
+    let stdout = sandbox.stdout_of(&args);
+
+    assert_eq!(
+        position(&sandbox, "budgeted"),
+        (0, chapter_one),
+        "an hour is longer than the chapter, so the chapter ends the run"
+    );
+    assert!(
+        stdout.contains("next: libretto read") && stdout.contains("--chapter 2"),
+        "and the next command carries on from chapter two: {stdout}"
     );
 }
 

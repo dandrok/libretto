@@ -567,7 +567,11 @@ fn read(
         &sentences,
         start,
         request.sentences,
-        request.stop_after.map(|window| Instant::now() + window),
+        // A window the clock cannot represent is not an error: that instant can never
+        // arrive, so there is no deadline at all and the run is unbounded.
+        request
+            .stop_after
+            .and_then(|window| Instant::now().checked_add(window)),
         |index, words| {
             if following {
                 ui.set_follow(Some(follow_sentence(index, words)));

@@ -86,7 +86,7 @@ pub struct BookArgs {
     /// Stop after this many sentences
     #[arg(long)]
     pub sentences: Option<usize>,
-    /// Stop after this much listening, e.g. 30m, 45s or 1h30m
+    /// Stop after this much listening, e.g. 30m, 45s, 1h30m or plain seconds
     #[arg(long = "for", value_name = "DURATION", value_parser = listening_window)]
     pub stop_after: Option<Duration>,
     /// Voice name, e.g. af_heart
@@ -114,5 +114,5 @@ pub struct BookArgs {
 fn listening_window(text: &str) -> Result<Duration, String> {
     estimate::parse_duration(text)
         .map(Duration::from_secs)
-        .ok_or_else(|| format!("`{text}` is not a duration — try 30m, 45s or 1h30m"))
+        .ok_or_else(|| format!("`{text}` is not a duration — try 30m, 45s, 1h30m or plain seconds"))
 }
