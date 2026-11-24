@@ -9,7 +9,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 
@@ -261,7 +261,8 @@ pub struct Session<'a> {
     pub captions: bool,
 }
 
-/// Play `sentences[start..]`, stopping after `limit` sentences if given.
+/// Play `sentences[start..]`, stopping after `limit` sentences if given and between
+/// sentences once `stop_after` has passed.
 ///
 /// `on_played` is called with the index of the next sentence after each one
 /// finishes, which is where the caller persists progress: a killed reader loses
@@ -271,6 +272,7 @@ pub fn play_sentences(
     sentences: &[String],
     start: usize,
     limit: Option<usize>,
+    stop_after: Option<Instant>,
     mut on_speaking: impl FnMut(usize, Option<&[Word]>),
     mut on_played: impl FnMut(usize),
 ) -> Result<Played, PlayError> {
@@ -287,7 +289,11 @@ pub fn play_sentences(
         Some(limit) => begin.saturating_add(limit).min(total),
         None => total,
     };
-    if begin >= end {
+    // A window that has already closed starts nothing, and this check is up here rather
+    // than only in the loop so it also pays for no synthesis: an expired `--for` costs a
+    // hash and a parse, nothing more.
+    let closed = || stop_after.is_some_and(|deadline| Instant::now() >= deadline);
+    if begin >= end || closed() {
         return Ok(Played {
             next: begin,
             count: 0,
@@ -328,6 +334,12 @@ pub fn play_sentences(
         });
 
         for (index, hit, result) in rx {
+            // Between sentences, never inside one: the sentence being spoken is finished,
+            // so the position saved below is a sentence boundary and nobody hears half a
+            // word chopped off by a timer.
+            if closed() {
+                break;
+            }
             let (path, words) = match result {
                 Ok(audio) => {
                     silent_run = 0;
@@ -463,6 +475,21 @@ mod tests {
         }
     }
 
+    /// A player that takes its time. The only way to watch a listening window close in the
+    /// middle of a run without waiting for a real book to be read aloud.
+    struct SlowPlayer {
+        played: RefCell<Vec<PathBuf>>,
+        per_sentence: Duration,
+    }
+
+    impl Player for SlowPlayer {
+        fn play(&self, file: &Path) -> Result<(), PlayError> {
+            self.played.borrow_mut().push(file.to_path_buf());
+            std::thread::sleep(self.per_sentence);
+            Ok(())
+        }
+    }
+
     fn sentences(count: usize) -> Vec<String> {
         (0..count).map(|i| format!("Sentence {i}.")).collect()
     }
@@ -488,6 +515,7 @@ mod tests {
             &sentences(4),
             1,
             Some(2),
+            None,
             |_, _| {},
             |next| positions.push(next),
         )
@@ -498,6 +526,93 @@ mod tests {
         assert_eq!(positions, vec![2, 3], "progress after each sentence");
         assert_eq!(engine.calls(), 2);
         assert_eq!(player.played.borrow().len(), 2);
+    }
+
+    #[test]
+    fn the_run_stops_at_a_sentence_boundary_once_the_time_is_up() {
+        let engine = CountingEngine::new();
+        let player = SlowPlayer {
+            played: RefCell::new(Vec::new()),
+            per_sentence: Duration::from_millis(20),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::at(dir.path());
+        let template = SpeechRequest::new("");
+        let session = Session {
+            engine: &engine,
+            player: &player,
+            cache: &cache,
+            template: &template,
+            captions: false,
+        };
+        let mut positions = Vec::new();
+
+        // Thirty milliseconds against twenty per sentence: the window closes after the
+        // first or second sentence, never after the tenth.
+        let window = Instant::now() + Duration::from_millis(30);
+        let result = play_sentences(
+            &session,
+            &sentences(10),
+            0,
+            None,
+            Some(window),
+            |_, _| {},
+            |next| positions.push(next),
+        )
+        .expect("plays");
+
+        assert!(result.count >= 1, "the window was open when the run began");
+        assert!(result.count < 10, "it closed before the chapter ended");
+        assert_eq!(
+            result.next, result.count,
+            "the saved position is the sentence that did not start"
+        );
+        assert_eq!(
+            positions.len(),
+            result.count,
+            "progress is reported only for sentences that played"
+        );
+        assert_eq!(
+            player.played.borrow().len(),
+            result.count,
+            "the sentence being spoken is finished, not cut"
+        );
+    }
+
+    #[test]
+    fn an_expired_window_synthesizes_nothing() {
+        let engine = CountingEngine::new();
+        let player = recording_player(None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache = Cache::at(dir.path());
+        let template = SpeechRequest::new("");
+        let session = Session {
+            engine: &engine,
+            player: &player,
+            cache: &cache,
+            template: &template,
+            captions: false,
+        };
+
+        let past = Instant::now() - Duration::from_secs(1);
+        let result = play_sentences(
+            &session,
+            &sentences(4),
+            0,
+            None,
+            Some(past),
+            |_, _| {},
+            |_| {},
+        )
+        .expect("no work to do");
+
+        assert_eq!(result.count, 0);
+        assert_eq!(result.next, 0, "nothing moved, so the next run starts here");
+        assert_eq!(
+            engine.calls(),
+            0,
+            "a window that never opened pays for no audio"
+        );
     }
 
     #[test]
@@ -515,9 +630,9 @@ mod tests {
             captions: false,
         };
 
-        play_sentences(&session, &sentences(3), 0, None, |_, _| {}, |_| {}).expect("first");
-        let second =
-            play_sentences(&session, &sentences(3), 0, None, |_, _| {}, |_| {}).expect("second");
+        play_sentences(&session, &sentences(3), 0, None, None, |_, _| {}, |_| {}).expect("first");
+        let second = play_sentences(&session, &sentences(3), 0, None, None, |_, _| {}, |_| {})
+            .expect("second");
 
         assert_eq!(engine.calls(), 3, "synthesized once per sentence");
         assert_eq!(second.cache_hits, 3, "the second pass is all hits");
@@ -538,8 +653,8 @@ mod tests {
             captions: false,
         };
 
-        let result =
-            play_sentences(&session, &sentences(2), 9, None, |_, _| {}, |_| {}).expect("no work");
+        let result = play_sentences(&session, &sentences(2), 9, None, None, |_, _| {}, |_| {})
+            .expect("no work");
 
         assert_eq!(result.count, 0);
         assert_eq!(result.next, 2, "clamped to the end, not past it");
@@ -566,6 +681,7 @@ mod tests {
             &session,
             &sentences(5),
             0,
+            None,
             None,
             |_, _| {},
             |next| positions.push(next),
@@ -608,6 +724,7 @@ mod tests {
             &lines,
             0,
             None,
+            None,
             |_, _| {},
             |next| positions.push(next),
         )
@@ -637,7 +754,7 @@ mod tests {
             captions: false,
         };
 
-        let error = play_sentences(&session, &sentences(20), 0, None, |_, _| {}, |_| {})
+        let error = play_sentences(&session, &sentences(20), 0, None, None, |_, _| {}, |_| {})
             .expect_err("silence everywhere is a broken endpoint");
 
         assert!(
@@ -775,6 +892,7 @@ mod tests {
             &session,
             &lines,
             0,
+            None,
             None,
             |index, words| {
                 played_before.push(player.played.borrow().len());

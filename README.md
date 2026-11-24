@@ -140,6 +140,7 @@ a property of your machine, not of the book.
 | `--chapter N` | jump to a chapter (1-based), starting at its first sentence |
 | `--skip N` / `--rewind N` | move forward, or replay a little, without losing your place |
 | `--sentences N` | play N sentences and stop — good for trying a voice |
+| `--for 30m` | stop when the listening window closes (`45s`, `1h30m`, or bare seconds) |
 | `--voice`, `--speed` | `af_heart` (default), `af_bella`, `bf_emma`; speed 0.25–4.0 |
 | `--model`, `--prefetch` | the model name sent to the endpoint (`kokoro`); sentences synthesized ahead (5) |
 | `--endpoint`, `--player` | another TTS server, or another player |

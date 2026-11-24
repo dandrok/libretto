@@ -9,6 +9,7 @@ mod cli;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 
@@ -121,6 +122,7 @@ fn resume(store: &Store, quiet: bool) -> Result<(), AppError> {
             skip: 0,
             rewind: 0,
             sentences: None,
+            stop_after: None,
         },
         Overrides::default(),
         quiet,
@@ -355,6 +357,7 @@ fn split(args: BookArgs, sync_offset: Option<i64>) -> (ReadRequest, Overrides) {
             skip: args.skip,
             rewind: args.rewind,
             sentences: args.sentences,
+            stop_after: args.stop_after,
         },
         Overrides {
             voice: args.voice,
@@ -374,6 +377,8 @@ struct ReadRequest {
     skip: usize,
     rewind: usize,
     sentences: Option<usize>,
+    /// How long the listening window lasts; `None` means until the chapter ends.
+    stop_after: Option<Duration>,
 }
 
 fn read(
@@ -562,6 +567,7 @@ fn read(
         &sentences,
         start,
         request.sentences,
+        request.stop_after.map(|window| Instant::now() + window),
         |index, words| {
             if following {
                 ui.set_follow(Some(follow_sentence(index, words)));

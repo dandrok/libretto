@@ -157,6 +157,69 @@ fn skip_advances_the_position_without_playing_what_it_skips() {
 }
 
 #[test]
+fn a_timer_that_has_already_expired_plays_nothing() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book(
+        "book.epub",
+        Some("Timed"),
+        &[("One", "One sentence. Two sentence. Three sentence.")],
+    );
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+    let endpoint = fake.endpoint();
+
+    let args = read_args("timed", &fake, &["--endpoint", &endpoint, "--for", "0s"]);
+    let stdout = sandbox.stdout_of(&args);
+
+    assert_eq!(
+        position(&sandbox, "timed"),
+        (0, 0),
+        "a window that closed before the run began starts no sentence"
+    );
+    assert_eq!(
+        fake.hits(),
+        0,
+        "nor does it pay for audio it will not speak"
+    );
+    assert!(
+        stdout.contains("0 played"),
+        "and it says so rather than pretending the chapter ended: {stdout}"
+    );
+}
+
+#[test]
+fn a_timer_that_cannot_be_parsed_exits_2_without_playing() {
+    let sandbox = Sandbox::new();
+    let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
+    let book = sandbox.book("book.epub", Some("Timed"), &[("One", "Some text.")]);
+    sandbox.stdout_of(&["add", book.to_str().expect("path")]);
+    let endpoint = fake.endpoint();
+
+    let output = sandbox.run(&[
+        "read",
+        "timed",
+        "--player",
+        "true",
+        "--endpoint",
+        &endpoint,
+        "--for",
+        "half an hour",
+    ]);
+
+    assert_eq!(output.status.code(), Some(2), "bad input is not a state");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--for") && stderr.contains("invalid value"),
+        "the flag, not an unknown argument: {stderr}"
+    );
+    assert_eq!(
+        fake.hits(),
+        0,
+        "nothing is played for a duration it cannot read"
+    );
+}
+
+#[test]
 fn an_ambiguous_prefix_lists_the_candidates_and_exits_2() {
     let sandbox = Sandbox::new();
     let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));

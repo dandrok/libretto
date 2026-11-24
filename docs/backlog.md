@@ -85,7 +85,6 @@ the substitution set must be in the fingerprint or stale audio replays silently.
 
 ### B-11 Smaller ones
 
-- Sleep timer (`--for 30m`). Trivial against the existing play loop. Gate: spec.
 - Bookmarks, notes, and an explicit `done` — `done` today only happens by reading to the end.
 - `--interactive` (space / n / q): promised in `decisions.md` §3 as optional v0.6, never
   shipped. Build it or delete the paragraph; a promise in a decisions doc reads like a plan.
