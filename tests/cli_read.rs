@@ -236,7 +236,7 @@ fn a_timer_that_cannot_be_parsed_exits_2_without_playing() {
 }
 
 #[test]
-fn an_unrepresentable_window_is_not_a_panic() {
+fn an_unrepresentable_window_is_refused() {
     let sandbox = Sandbox::new();
     let fake = FakeTts::start(Reply::Audio(AUDIO.to_vec()));
     let book = sandbox.book(
@@ -246,10 +246,9 @@ fn an_unrepresentable_window_is_not_a_panic() {
     );
     sandbox.stdout_of(&["add", book.to_str().expect("path")]);
     let endpoint = fake.endpoint();
-    let total = sentence_count(&book);
 
-    // Nine quintillion seconds: an instant no clock holds, so there is no deadline and
-    // the run is unbounded rather than a panic in the middle of the chapter.
+    // Nine quintillion seconds: an instant no clock holds. Refused like any other bad input,
+    // because honouring it by ignoring it would read the chapter a listener asked to stop.
     let args = read_args(
         "timed",
         &fake,
@@ -258,19 +257,20 @@ fn an_unrepresentable_window_is_not_a_panic() {
     let output = sandbox.run(&args);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "a window the clock cannot hold is not a failure: {stderr}"
-    );
+    assert_eq!(output.status.code(), Some(2), "bad input, not a state");
     assert!(
-        !stderr.contains("panicked"),
-        "and it is not a panic either: {stderr}"
+        stderr.contains("--for") && stderr.contains("invalid value"),
+        "the flag, refused as a value: {stderr}"
+    );
+    assert_eq!(
+        fake.hits(),
+        0,
+        "a window it cannot honour spends nothing on audio"
     );
     assert_eq!(
         position(&sandbox, "timed"),
-        (0, total),
-        "the chapter is read as it would be without --for"
+        (0, 0),
+        "and reads nothing, rather than reading the chapter unbounded"
     );
 }
 

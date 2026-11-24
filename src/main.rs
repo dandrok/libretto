@@ -567,8 +567,9 @@ fn read(
         &sentences,
         start,
         request.sentences,
-        // A window the clock cannot represent is not an error: that instant can never
-        // arrive, so there is no deadline at all and the run is unbounded.
+        // The boundary already refuses a window this clock cannot hold; the checked add is
+        // the guard that keeps that promise from turning into a panic if one ever slipped
+        // through the parser.
         request
             .stop_after
             .and_then(|window| Instant::now().checked_add(window)),
