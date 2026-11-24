@@ -202,9 +202,13 @@ on the tagged tree.
   position is the one after it, and a window that has already closed plays nothing at all.
   The budget covers one run, and a run is one chapter, so a timer longer than the chapter
   stops where the chapter does and the `next: … --chapter N` line carries on. A duration
-  that does not parse is bad input — exit 2, nothing played —
+  that does not parse is bad input — exit 2, nothing played. A window this machine's clock
+  cannot hold is not a panic and not a false promise — that instant can never arrive, so the
+  run is unbounded and the chapter is read as it would be without `--for` —
   `tests/cli_read.rs::a_timer_that_has_already_expired_plays_nothing`,
   `tests/cli_read.rs::a_timer_that_cannot_be_parsed_exits_2_without_playing`,
+  `tests/cli_read.rs::an_unrepresentable_window_is_not_a_panic`,
+  `tests/cli_read.rs::a_window_longer_than_the_chapter_stops_at_the_chapter_end`,
   `src/estimate.rs::tests::a_duration_is_read_in_the_units_a_listener_says`,
   `src/play.rs::tests::the_run_stops_at_a_sentence_boundary_once_the_time_is_up`
 
