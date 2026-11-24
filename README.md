@@ -140,6 +140,7 @@ a property of your machine, not of the book.
 | `--chapter N` | jump to a chapter (1-based), starting at its first sentence |
 | `--skip N` / `--rewind N` | move forward, or replay a little, without losing your place |
 | `--sentences N` | play N sentences and stop — good for trying a voice |
+| `--for 30m` | stop when the listening window closes (`45s`, `1h30m`, or bare seconds) |
 | `--voice`, `--speed` | `af_heart` (default), `af_bella`, `bf_emma`; speed 0.25–4.0 |
 | `--model`, `--prefetch` | the model name sent to the endpoint (`kokoro`); sentences synthesized ahead (5) |
 | `--endpoint`, `--player` | another TTS server, or another player |
@@ -231,7 +232,7 @@ follow:
 |---|---|
 | 0 | ok |
 | 1 | unknown book |
-| 2 | ambiguous id (lists the candidates) |
+| 2 | usage error, or an ambiguous id (lists the candidates) |
 | 3 | TTS endpoint unreachable |
 | 4 | bad book (DRM, corrupt, or the file changed since it was added — `libretto refresh <id>` re-indexes that last case) |
 | 5 | another reader holds the lock |

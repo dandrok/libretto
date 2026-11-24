@@ -2,8 +2,11 @@
 //! shape of the interface can be read in one screen.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
+
+use crate::estimate;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -83,6 +86,9 @@ pub struct BookArgs {
     /// Stop after this many sentences
     #[arg(long)]
     pub sentences: Option<usize>,
+    /// Stop after this much listening, e.g. 30m, 45s, 1h30m or plain seconds
+    #[arg(long = "for", value_name = "DURATION", value_parser = listening_window)]
+    pub stop_after: Option<Duration>,
     /// Voice name, e.g. af_heart
     #[arg(long)]
     pub voice: Option<String>,
@@ -101,4 +107,22 @@ pub struct BookArgs {
     /// Sentences to synthesize ahead
     #[arg(long)]
     pub prefetch: Option<usize>,
+}
+
+/// `--for 30m` travels as a `Duration`, and the reading is done here so that a typo is clap's
+/// usage error (exit 2, nothing read) instead of a run that stops at a surprising time.
+///
+/// A window this machine's clock cannot hold is refused for the same reason: it could only be
+/// honoured by not honouring it, and a budget that quietly becomes no budget reads the whole
+/// chapter a listener asked to stop after half an hour.
+fn listening_window(text: &str) -> Result<Duration, String> {
+    let window = estimate::parse_duration(text)
+        .map(Duration::from_secs)
+        .ok_or_else(|| {
+            format!("`{text}` is not a duration — try 30m, 45s, 1h30m or plain seconds")
+        })?;
+    Instant::now()
+        .checked_add(window)
+        .map(|_| window)
+        .ok_or_else(|| format!("`{text}` is longer than this machine can time"))
 }

@@ -22,10 +22,12 @@ works offline after first play.
 - `libretto add <path>` — index an EPUB
 - `libretto ls` — library with progress
 - `libretto read <id|prefix>` — play from the stored position
+- `libretto follow <id|prefix>` — the same, with the sentence on screen and the word underlined
 - `libretto rm <id>`
+- `libretto refresh <id|prefix>` — re-index a book whose file changed, keeping the position
 - `libretto doctor` — mpv present? endpoint reachable? cache size?
 - bare `libretto` — resume the last book
-- Flags: `--voice --speed --endpoint --model --player --prefetch --chapter --skip --rewind --sentences`
+- Flags: `--voice --speed --endpoint --model --player --prefetch --chapter --skip --rewind --sentences --for --quiet --width --sync-offset`
 
 Not: MOBI/AZW3, m4b export, sync, accounts, telemetry, any engine that is not
 OpenAI-compatible HTTP. (PDF was in the v1 cut line and arrived in 1.1.0 as an adapter
@@ -70,7 +72,7 @@ written once. `TtsEngine` and `Player` live in the module they serve rather than
 `traits.rs`, so a fake is a two-line impl in the test that needs one.
 
 - Errors: `thiserror` in each module, `anyhow` only in `main.rs`; every user-facing failure has an
-  exit code (0 ok, 1 unknown book, 2 ambiguous, 3 tts down, 4 bad book, 5 already reading, 6 corrupt state)
+  exit code (0 ok, 1 unknown book, 2 usage error or ambiguous, 3 tts down, 4 bad book, 5 already reading, 6 corrupt state)
 - No panics on user input: no `unwrap` outside tests, `expect` only with an invariant comment
 - SOLID in practice, not in slogans: one reason to change per module, dependencies point at traits,
   `text.rs` never opens a file, `store.rs` never does HTTP

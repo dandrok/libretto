@@ -37,6 +37,7 @@ In scope:
 - `libretto doctor` — library, config, player, endpoint and cache in one report
 - Local OpenAI-compatible TTS (`http://127.0.0.1:8880/v1` by default), with a disk cache
 - Sentence and chapter skipping, and rewinding
+- A listening budget that ends the run before the chapter does (`--for 30m`)
 
 Out of scope (explicit): MOBI/AZW3, `.m4b` export, a full-screen TUI, cross-device sync,
 accounts, telemetry, any TTS engine that is not OpenAI-compatible HTTP.
@@ -193,6 +194,24 @@ on the tagged tree.
   `tests/split.rs::strip_html_announces_a_code_sample_instead_of_reading_it`,
   `tests/split.rs::strip_html_reads_inline_code_in_its_sentence`,
   `tests/split.rs::strip_html_says_nothing_for_an_empty_code_sample`
+- AC-29: `--for <duration>` ends a run when its window closes instead of at the end of the
+  chapter. The flag takes a plain duration — `90s`, `30m`, `1h30m`, or a bare count of
+  seconds — and the window starts when playback does, not while the book is being hashed and
+  parsed, because a PDF's seconds of `pdftotext` are not listening. A sentence is never cut:
+  the check happens between sentences, so the one being spoken is finished, the saved
+  position is the one after it, and a window that has already closed plays nothing at all.
+  The budget covers one run, and a run is one chapter, so a timer longer than the chapter
+  stops where the chapter does and the `next: … --chapter N` line carries on. A duration
+  that does not parse is bad input — exit 2, nothing played — and so is a window this
+  machine's clock cannot hold, because a budget that cannot be honoured must not quietly
+  become no budget at all; both are refused before the book is opened and before anything is
+  synthesized —
+  `tests/cli_read.rs::a_timer_that_has_already_expired_plays_nothing`,
+  `tests/cli_read.rs::a_timer_that_cannot_be_parsed_exits_2_without_playing`,
+  `tests/cli_read.rs::an_unrepresentable_window_is_refused`,
+  `tests/cli_read.rs::a_window_longer_than_the_chapter_stops_at_the_chapter_end`,
+  `src/estimate.rs::tests::a_duration_is_read_in_the_units_a_listener_says`,
+  `src/play.rs::tests::the_run_stops_at_a_sentence_boundary_once_the_time_is_up`
 
 Proven at the store layer only: exit 5 for a second concurrent reader
 (`src/store.rs::a_lock_held_by_this_process_is_respected`,
@@ -256,6 +275,9 @@ Playback and synthesis:
 - bare `libretto` with no history exits 0 and says so; `--chapter N` ignores the stored
   position and starts at that chapter's first sentence; a stored sentence index past the end
   is clamped rather than treated as an error
+- `--for 30m` stops between sentences, never inside one, and its window begins at the first
+  sentence rather than at the open, so a book that took ten seconds to parse still gets
+  thirty minutes of listening; the budget is one run, and a run is one chapter
 - a second reader on the same library exits 5; a lock left by a dead pid is recovered
 - a corrupt library is reported with its path and never overwritten (exit 6)
 - a changed source file is refused with exit 4 until it is refreshed; `refresh` never
